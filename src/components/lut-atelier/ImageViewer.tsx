@@ -14,7 +14,6 @@ import {
   GripVertical,
   Upload,
   ImagePlus,
-  X,
 } from 'lucide-react';
 import { useAppStore, type CompareMode, type LUTItem, type ImageInfo } from '@/store/useAppStore';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -81,29 +80,6 @@ const COLOR_SPACE_CONFIG = {
   'adobe-rgb': { label: 'Adobe RGB',   color: 'bg-sky-500/20 text-sky-400 border-sky-500/30' },
   'prophoto-rgb': { label: 'ProPhoto RGB', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
 } as const;
-
-/* -------------------------------------------------------------------------- */
-/*  Checkerboard pattern                                                      */
-/* -------------------------------------------------------------------------- */
-
-function CheckerboardPattern() {
-  return (
-    <div
-      className="absolute inset-0"
-      style={{
-        backgroundImage: `
-          linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
-          linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
-          linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
-          linear-gradient(-45deg, transparent 75%, #2a2a2a 75%)
-        `,
-        backgroundSize: '20px 20px',
-        backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
-        opacity: 0.5,
-      }}
-    />
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Compare mode labels                                                       */
@@ -215,16 +191,9 @@ function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
         onDrop={handleDrop}
         onClick={() => fileInputRef.current?.click()}
       >
-        {/* Icon */}
-        <div className={`
-          flex items-center justify-center w-16 h-16 rounded-2xl
-          transition-colors duration-300
-          ${isDragging ? 'bg-amber-500/10' : 'bg-zinc-800'}
-        `}>
+        <div className={`flex items-center justify-center w-16 h-16 rounded-2xl transition-colors duration-300 ${isDragging ? 'bg-amber-500/10' : 'bg-zinc-800'}`}>
           <Upload className={`w-8 h-8 transition-colors duration-300 ${isDragging ? 'text-amber-400' : 'text-zinc-500'}`} />
         </div>
-
-        {/* Text */}
         <div className="text-center">
           <p className="text-sm font-medium text-zinc-300 mb-1">
             {isDragging ? 'Drop your photo here' : 'Import a Photo'}
@@ -233,8 +202,6 @@ function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
             Drag & drop an image, or click to browse
           </p>
         </div>
-
-        {/* Supported formats */}
         <div className="flex items-center gap-2 text-[10px] text-zinc-600 uppercase tracking-wider">
           <span>JPG</span>
           <span className="w-1 h-1 rounded-full bg-zinc-700" />
@@ -246,8 +213,6 @@ function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
           <span className="w-1 h-1 rounded-full bg-zinc-700" />
           <span>PSD</span>
         </div>
-
-        {/* Browse button */}
         <Button
           variant="outline"
           size="sm"
@@ -260,8 +225,6 @@ function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
           <ImagePlus className="w-4 h-4 mr-2" />
           Browse Files
         </Button>
-
-        {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
@@ -274,39 +237,6 @@ function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
         />
       </div>
     </motion.div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/*  Graded image component                                                    */
-/* -------------------------------------------------------------------------- */
-
-function GradedImage({
-  image,
-  filter,
-  style,
-  className,
-}: {
-  image: ImageInfo;
-  filter: string;
-  style?: React.CSSProperties;
-  className?: string;
-}) {
-  return (
-    <img
-      src={image.dataUrl}
-      alt={image.name}
-      draggable={false}
-      className={className}
-      style={{
-        ...style,
-        filter: filter !== 'none' ? filter : undefined,
-        transition: 'filter 0.3s ease',
-        objectFit: 'contain',
-        userSelect: 'none',
-        ...({ WebkitUserDrag: 'none' } as React.CSSProperties),
-      }}
-    />
   );
 }
 
@@ -329,27 +259,18 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   } = useAppStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const splitLineRef = useRef<HTMLDivElement>(null);
   const isDraggingSplit = useRef(false);
 
   const [isBefore, setIsBefore] = useState(false);
-  const [zoom, setZoom] = useState<number | 'fit'>('fit');
+  const [zoomLevel, setZoomLevel] = useState(100); // always a number, 100 = actual pixels
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
-  const workspaceRef = useRef<HTMLDivElement>(null);
-
-  /* ----- Track previous image URL to reset zoom on image change ----- */
-  const prevImageRef = useRef(currentImage?.dataUrl);
-  useEffect(() => {
-    if (prevImageRef.current !== currentImage?.dataUrl) {
-      prevImageRef.current = currentImage?.dataUrl;
-      setZoom('fit');
-    }
-  }, [currentImage?.dataUrl]);
 
   /* ----- Observe container size ----- */
   useEffect(() => {
-    const el = containerRef.current;
+    const el = scrollContainerRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
       for (const entry of entries) {
@@ -362,6 +283,16 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  /* ----- Reset zoom when image changes ----- */
+  const prevImageUrlRef = useRef(currentImage?.dataUrl ?? '');
+  useEffect(() => {
+    const url = currentImage?.dataUrl ?? '';
+    if (url !== prevImageUrlRef.current) {
+      prevImageUrlRef.current = url;
+      setZoomLevel(0); // 0 means "fit"
+    }
+  }, [currentImage?.dataUrl]);
 
   /* ----- Derived state ----- */
 
@@ -378,6 +309,80 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   const colorSpaceInfo = COLOR_SPACE_CONFIG[settings.colorSpace];
   const hasImage = currentImage !== null;
+
+  // Calculate the "fit to container" zoom percentage
+  const fitZoomPercent = useMemo(() => {
+    if (!hasImage || containerSize.w === 0 || containerSize.h === 0) return 100;
+    const img = currentImage!;
+    const padding = 32;
+    const availW = containerSize.w - padding;
+    const availH = containerSize.h - padding;
+    if (availW <= 0 || availH <= 0) return 100;
+    return Math.round((Math.min(availW / img.width, availH / img.height)) * 100);
+  }, [hasImage, currentImage, containerSize]);
+
+  // 0 means "fit to view", otherwise it's the actual zoom %
+  const isFitMode = zoomLevel === 0;
+  const effectiveZoom = isFitMode ? fitZoomPercent : zoomLevel;
+
+  // Calculate display dimensions
+  const displayDims = useMemo(() => {
+    if (!hasImage || !currentImage) return { w: 0, h: 0 };
+    const scale = effectiveZoom / 100;
+    return {
+      w: Math.round(currentImage.width * scale),
+      h: Math.round(currentImage.height * scale),
+    };
+  }, [hasImage, currentImage, effectiveZoom]);
+
+  // Is the image larger than the container? (need scrolling)
+  const needsScroll = displayDims.w > containerSize.w - 32 || displayDims.h > containerSize.h - 32;
+
+  /* ----- Zoom controls ----- */
+
+  const zoomIn = useCallback(() => {
+    setZoomLevel(prev => {
+      const current = prev === 0 ? fitZoomPercent : prev;
+      return Math.min(current + 25, 800);
+    });
+  }, [fitZoomPercent]);
+
+  const zoomOut = useCallback(() => {
+    setZoomLevel(prev => {
+      const current = prev === 0 ? fitZoomPercent : prev;
+      if (current - 25 <= fitZoomPercent) return 0;
+      return Math.max(current - 25, 5);
+    });
+  }, [fitZoomPercent]);
+
+  const cycleZoom = useCallback(() => {
+    setZoomLevel(prev => {
+      const current = prev === 0 ? fitZoomPercent : prev;
+      if (current <= fitZoomPercent + 1) return 100;
+      if (current <= 125) return 200;
+      if (current <= 250) return 400;
+      return 0; // back to fit
+    });
+  }, [fitZoomPercent]);
+
+  /* ----- Scroll-wheel zoom ----- */
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.deltaY < 0) {
+          zoomIn();
+        } else {
+          zoomOut();
+        }
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false, capture: true });
+    return () => el.removeEventListener('wheel', handleWheel, { capture: true });
+  }, [zoomIn, zoomOut]);
 
   /* ----- Image load handler ----- */
 
@@ -463,74 +468,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     setCompareMode(next);
   }, [compareMode, setCompareMode]);
 
-  /* ----- Zoom controls ----- */
-
-  // Calculate fit scale and actual zoom percentage
-  const fitScale = useMemo(() => {
-    if (!hasImage || containerSize.w === 0 || containerSize.h === 0) return 1;
-    const img = currentImage!;
-    const padding = 48;
-    const availW = containerSize.w - padding;
-    const availH = containerSize.h - 100;
-    return Math.min(availW / img.width, availH / img.height, 1);
-  }, [hasImage, currentImage, containerSize]);
-
-  const zoomPercent = useMemo(() => {
-    if (zoom === 'fit') return Math.round(fitScale * 100);
-    return zoom;
-  }, [zoom, fitScale]);
-
-  // Get actual display dimensions for the image
-  const imageDisplaySize = useMemo(() => {
-    if (!hasImage) return { w: 0, h: 0 };
-    const img = currentImage!;
-    const scale = zoom === 'fit' ? fitScale : zoom / 100;
-    return {
-      w: Math.round(img.width * scale),
-      h: Math.round(img.height * scale),
-    };
-  }, [hasImage, currentImage, zoom, fitScale]);
-
-  const isZoomed = zoom !== 'fit';
-
-  const cycleZoom = useCallback(() => {
-    const levels: Array<number | 'fit'> = ['fit', 100, 200, 400];
-    const idx = levels.indexOf(zoom);
-    setZoom(levels[(idx + 1) % levels.length]);
-  }, [zoom]);
-
-  const zoomIn = useCallback(() => {
-    const current = zoom === 'fit' ? Math.round(fitScale * 100) : zoom;
-    setZoom(Math.min(current + 25, 800));
-  }, [zoom, fitScale]);
-
-  const zoomOut = useCallback(() => {
-    const current = zoom === 'fit' ? Math.round(fitScale * 100) : zoom;
-    if (current - 25 <= Math.round(fitScale * 100)) {
-      setZoom('fit');
-    } else {
-      setZoom(Math.max(current - 25, 10));
-    }
-  }, [zoom, fitScale]);
-
-  /* ----- Scroll-wheel zoom ----- */
-  useEffect(() => {
-    const el = workspaceRef.current;
-    if (!el) return;
-    const handleWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        if (e.deltaY < 0) {
-          zoomIn();
-        } else {
-          zoomOut();
-        }
-      }
-    };
-    el.addEventListener('wheel', handleWheel, { passive: false });
-    return () => el.removeEventListener('wheel', handleWheel);
-  }, [zoomIn, zoomOut]);
-
   /* ----- Compare mode icons ----- */
 
   const CompareIcon = useMemo(() => {
@@ -585,6 +522,31 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   const img = currentImage!;
 
+  // CSS for the image element: always explicit pixel dimensions
+  const imgStyle: React.CSSProperties = {
+    width: displayDims.w,
+    height: displayDims.h,
+    filter: effectiveFilter !== 'none' ? effectiveFilter : undefined,
+    transition: 'filter 0.3s ease',
+    userSelect: 'none',
+    objectFit: 'fill',
+    borderRadius: 8,
+    boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)',
+  };
+
+  // Checkerboard background CSS (tiled)
+  const checkerBg: React.CSSProperties = {
+    backgroundImage: `
+      linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+      linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+      linear-gradient(-45deg, transparent 75%, #2a2a2a 75%)
+    `,
+    backgroundSize: '20px 20px',
+    backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px',
+    opacity: 0.5,
+  };
+
   return (
     <div
       ref={containerRef}
@@ -624,181 +586,189 @@ export default function ImageViewer({ className }: ImageViewerProps) {
         </div>
       </motion.div>
 
-      {/* ----- Workspace area ----- */}
-      <div
-        ref={workspaceRef}
-        className={`relative flex flex-1 ${isZoomed ? 'overflow-auto' : 'overflow-hidden'} p-4`}
-      >
-        <CheckerboardPattern />
-
-        <motion.div
-          className={`relative z-10 ${isZoomed ? '' : 'flex items-center justify-center w-full h-full'}`}
-          style={isZoomed ? { display: 'inline-block' } : undefined}
-          initial={{ opacity: 0, scale: 0.96 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.4, ease: 'easeOut' }}
-        >
-          {/* -------- OFF / Single view -------- */}
-          {compareMode === 'off' && (
-            <div className="relative inline-block">
-              <GradedImage
-                image={img}
-                filter={effectiveFilter}
-                className="rounded-lg shadow-2xl shadow-black/50"
-                style={isZoomed ? {
-                  width: imageDisplaySize.w,
-                  height: imageDisplaySize.h,
-                } : {
-                  maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
-                  maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                }}
-              />
-              <AnimatePresence>
-                {isBefore && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className="absolute inset-0 flex items-center justify-center rounded-lg"
-                  >
-                    <Badge variant="outline" className="border-white/20 bg-black/60 text-xs text-white backdrop-blur-sm">
-                      Original
-                    </Badge>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+      {/* Zoom indicator (top center, shown when not at fit) */}
+      <AnimatePresence>
+        {!isFitMode && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            className="absolute top-3 left-1/2 -translate-x-1/2 z-40 pointer-events-none"
+          >
+            <div className="rounded-md bg-black/70 px-3 py-1.5 text-[11px] font-medium tabular-nums text-white/80 backdrop-blur-sm border border-white/10">
+              {effectiveZoom}%
             </div>
-          )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          {/* -------- SPLIT view -------- */}
-          {compareMode === 'split' && (
-            <div
-              className="relative overflow-hidden rounded-lg shadow-2xl shadow-black/50 inline-block"
-              style={isZoomed ? {
-                width: imageDisplaySize.w,
-                height: imageDisplaySize.h,
-              } : undefined}
-            >
-              <GradedImage
-                image={img}
-                filter="none"
-                className="block"
-                style={isZoomed ? {
-                  width: imageDisplaySize.w,
-                  height: imageDisplaySize.h,
-                } : {
-                  maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
-                  maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                }}
-              />
+      {/* ===== SCROLLABLE IMAGE AREA ===== */}
+      <div
+        ref={scrollContainerRef}
+        className="relative flex-1"
+        style={{
+          overflow: needsScroll ? 'auto' : 'hidden',
+        }}
+      >
+        {/* Checkerboard background - fixed to scroll area */}
+        <div className="absolute inset-0" style={checkerBg} />
 
-              {/* Graded overlay clipped from split position */}
-              <div
-                className="absolute inset-0 overflow-hidden"
-                style={{
-                  left: `${splitPosition}%`,
-                  width: `${100 - splitPosition}%`,
-                }}
-              >
-                <GradedImage
-                  image={img}
-                  filter={effectiveFilter}
-                  className="block"
-                  style={isZoomed ? {
-                    width: imageDisplaySize.w,
-                    height: imageDisplaySize.h,
-                    marginLeft: `-${splitPosition}%`,
-                  } : {
-                    maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
-                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                    marginLeft: `-${splitPosition}%`,
-                    width: `${100 / (100 - splitPosition) * 100}%`,
-                  }}
+        {/* Centering wrapper - flex center when fit, top-left when scrollable */}
+        <div
+          className="relative z-10"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: needsScroll ? displayDims.w + 32 : '100%',
+            minHeight: needsScroll ? displayDims.h + 32 : '100%',
+            padding: 16,
+          }}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.3, ease: 'easeOut' }}
+            style={{ position: 'relative', flexShrink: 0 }}
+          >
+            {/* -------- OFF / Single view -------- */}
+            {compareMode === 'off' && (
+              <div style={{ position: 'relative', display: 'inline-block' }}>
+                <img
+                  src={img.dataUrl}
+                  alt={img.name}
+                  draggable={false}
+                  style={imgStyle}
                 />
+                <AnimatePresence>
+                  {isBefore && (
+                    <motion.div
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="absolute inset-0 flex items-center justify-center rounded-lg"
+                    >
+                      <Badge variant="outline" className="border-white/20 bg-black/60 text-xs text-white backdrop-blur-sm">
+                        Original
+                      </Badge>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
+            )}
 
-              {/* Labels */}
-              <ImageLabel text="Before" side="left" />
-              <ImageLabel text="After" side="right" />
-
-              {/* Split line */}
+            {/* -------- SPLIT view -------- */}
+            {compareMode === 'split' && (
               <div
-                ref={splitLineRef}
-                className="absolute top-0 z-30 flex h-full cursor-col-resize flex-col items-center"
-                style={{ left: `${splitPosition}%`, transform: 'translateX(-50%)' }}
-                onPointerDown={handleSplitPointerDown}
-                onPointerMove={handleSplitPointerMove}
-                onPointerUp={handleSplitPointerUp}
+                className="relative overflow-hidden rounded-lg shadow-2xl shadow-black/50"
+                style={{ width: displayDims.w, height: displayDims.h }}
               >
-                <div
-                  className="h-full w-[2px]"
+                {/* Original (before) - full image */}
+                <img
+                  src={img.dataUrl}
+                  alt={img.name}
+                  draggable={false}
                   style={{
-                    background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 15%, rgba(255,255,255,0.9) 85%, rgba(255,255,255,0) 100%)',
+                    ...imgStyle,
+                    width: displayDims.w,
+                    height: displayDims.h,
+                    borderRadius: 0,
+                    filter: 'none',
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
                   }}
                 />
-                <div className="absolute top-1/2 flex -translate-y-1/2 flex-col items-center gap-0.5">
-                  <div
-                    className="flex h-10 w-6 items-center justify-center rounded-full border border-white/30"
+
+                {/* Graded (after) - clipped from split position */}
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{
+                    left: `${splitPosition}%`,
+                    width: `${100 - splitPosition}%`,
+                  }}
+                >
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    draggable={false}
                     style={{
-                      background: 'linear-gradient(135deg, rgba(80,80,80,0.9) 0%, rgba(40,40,40,0.95) 100%)',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                      width: displayDims.w,
+                      height: displayDims.h,
+                      filter: effectiveFilter !== 'none' ? effectiveFilter : undefined,
+                      transition: 'filter 0.3s ease',
+                      userSelect: 'none',
+                      objectFit: 'fill',
+                      marginLeft: `-${splitPosition}%`,
                     }}
-                  >
-                    <GripVertical className="h-4 w-4 text-white/70" />
+                  />
+                </div>
+
+                {/* Labels */}
+                <ImageLabel text="Before" side="left" />
+                <ImageLabel text="After" side="right" />
+
+                {/* Split line */}
+                <div
+                  ref={splitLineRef}
+                  className="absolute top-0 z-30 flex h-full cursor-col-resize flex-col items-center"
+                  style={{ left: `${splitPosition}%`, transform: 'translateX(-50%)' }}
+                  onPointerDown={handleSplitPointerDown}
+                  onPointerMove={handleSplitPointerMove}
+                  onPointerUp={handleSplitPointerUp}
+                >
+                  <div
+                    className="h-full w-[2px]"
+                    style={{
+                      background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 15%, rgba(255,255,255,0.9) 85%, rgba(255,255,255,0) 100%)',
+                    }}
+                  />
+                  <div className="absolute top-1/2 flex -translate-y-1/2 flex-col items-center gap-0.5">
+                    <div
+                      className="flex h-10 w-6 items-center justify-center rounded-full border border-white/30"
+                      style={{
+                        background: 'linear-gradient(135deg, rgba(80,80,80,0.9) 0%, rgba(40,40,40,0.95) 100%)',
+                        boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                      }}
+                    >
+                      <GripVertical className="h-4 w-4 text-white/70" />
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
 
-          {/* -------- SIDE-BY-SIDE view -------- */}
-          {compareMode === 'side-by-side' && (
-            <div className="flex gap-3">
-              <div className="relative inline-block">
-                <ImageLabel text="Original" side="left" />
-                <GradedImage
-                  image={img}
-                  filter="none"
-                  className="rounded-lg shadow-2xl shadow-black/50"
-                  style={isZoomed ? {
-                    width: Math.round(imageDisplaySize.w / 2),
-                    height: imageDisplaySize.h,
-                  } : {
-                    maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
-                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                  }}
-                />
+            {/* -------- SIDE-BY-SIDE view -------- */}
+            {compareMode === 'side-by-side' && (
+              <div className="flex gap-3" style={{ width: displayDims.w + 12 }}>
+                <div style={{ position: 'relative', flexShrink: 0, width: (displayDims.w - 12) / 2 }}>
+                  <ImageLabel text="Original" side="left" />
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    draggable={false}
+                    style={{
+                      ...imgStyle,
+                      width: (displayDims.w - 12) / 2,
+                      height: displayDims.h,
+                      filter: 'none',
+                    }}
+                  />
+                </div>
+                <div style={{ position: 'relative', flexShrink: 0, width: (displayDims.w - 12) / 2 }}>
+                  <ImageLabel text="Graded" side="right" />
+                  <img
+                    src={img.dataUrl}
+                    alt={img.name}
+                    draggable={false}
+                    style={imgStyle}
+                  />
+                </div>
               </div>
-              <div className="relative inline-block">
-                <ImageLabel text="Graded" side="right" />
-                <GradedImage
-                  image={img}
-                  filter={effectiveFilter}
-                  className="rounded-lg shadow-2xl shadow-black/50"
-                  style={isZoomed ? {
-                    width: Math.round(imageDisplaySize.w / 2),
-                    height: imageDisplaySize.h,
-                  } : {
-                    maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
-                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                  }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Zoomed overflow indicator */}
-          {isZoomed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="absolute top-2 left-1/2 -translate-x-1/2 z-30 rounded-md bg-black/70 px-3 py-1 text-[11px] font-medium tabular-nums text-white/80 backdrop-blur-sm border border-white/10"
-            >
-              {zoomPercent}%
-            </motion.div>
-          )}
-        </motion.div>
+            )}
+          </motion.div>
+        </div>
       </div>
 
       {/* ================================================================== */}
@@ -872,7 +842,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
           <div className="mx-1 h-5 w-px bg-white/[0.08]" />
 
-          {/* Zoom out */}
+          {/* Zoom out button */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -888,27 +858,27 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipContent>
           </Tooltip>
 
-          {/* Zoom level indicator */}
+          {/* Zoom percentage / Fit button */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-lg px-2.5 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
+                className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-lg px-2 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
                 onClick={cycleZoom}
                 aria-label="Cycle zoom level"
               >
-                {zoom === 'fit' ? (
+                {isFitMode ? (
                   <Maximize2 className="h-4 w-4" />
                 ) : (
-                  <span>{zoomPercent}%</span>
+                  <span>{effectiveZoom}%</span>
                 )}
               </button>
             </TooltipTrigger>
             <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
-              {zoom === 'fit' ? 'Fit to view' : `Zoom: ${zoomPercent}% — Click to cycle`}
+              {isFitMode ? `Fit to view (${fitZoomPercent}%) — Click to set 100%` : `Zoom: ${effectiveZoom}% — Click to cycle`}
             </TooltipContent>
           </Tooltip>
 
-          {/* Zoom in */}
+          {/* Zoom in button */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
