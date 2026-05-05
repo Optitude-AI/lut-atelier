@@ -237,17 +237,17 @@ export default function Workspace() {
           {/* Grid Editor Panel (always visible on desktop) */}
           <motion.div
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 380, opacity: 1 }}
+            animate={{ width: 400, opacity: 1 }}
             transition={{ duration: 0.4, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
             className="border-l border-zinc-800/80 overflow-hidden flex-shrink-0 hidden xl:flex"
           >
-            <div className="w-[380px] h-full flex flex-col bg-zinc-950/50">
-              {/* Grid Header */}
+            <div className="w-[400px] h-full flex flex-col bg-zinc-950/50">
+              {/* Grid Type Toggle Header */}
               <div className="flex items-center justify-between h-10 px-3 border-b border-zinc-800/80 flex-shrink-0">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-400" />
                   <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-                    {activeGridType === 'ab' ? 'A/B Hue–Saturation' : 'C/L Chroma–Luminance'}
+                    Color Control
                   </span>
                 </div>
                 <Tabs
@@ -257,10 +257,10 @@ export default function Workspace() {
                 >
                   <TabsList className="h-6 bg-zinc-900 p-0.5">
                     <TabsTrigger value="ab" className="h-5 px-2 text-[10px] data-[state=active]:bg-zinc-700">
-                      A/B
+                      Hue/Sat
                     </TabsTrigger>
                     <TabsTrigger value="cl" className="h-5 px-2 text-[10px] data-[state=active]:bg-zinc-700">
-                      C/L
+                      Chr/Lum
                     </TabsTrigger>
                   </TabsList>
                 </Tabs>
@@ -272,20 +272,20 @@ export default function Workspace() {
                   {activeGridType === 'ab' ? (
                     <motion.div
                       key="ab"
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 20 }}
-                      transition={{ duration: 0.2 }}
+                      initial={{ opacity: 0, scale: 0.96 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.96 }}
+                      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                     >
                       <ABGrid />
                     </motion.div>
                   ) : (
                     <motion.div
                       key="cl"
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.2 }}
+                      initial={{ opacity: 0, scale: 0.96 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.96 }}
+                      transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
                     >
                       <CLGrid />
                     </motion.div>

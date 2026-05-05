@@ -302,3 +302,130 @@ Stage Summary:
 - All 5 camera log format conversion formulas implemented and visualized
 - Auto-detect with simulated histogram analysis and confidence scoring
 - Consistent dark theme design matching existing panels (zinc-950, shadcn/ui)
+
+---
+Task ID: 9
+Agent: CLGrid Octagonal Mesh Rebuild Agent
+Task: Rebuild CLGrid component with octagonal mesh control on circular chroma-luminance gradient
+
+Work Log:
+- Read existing CLGrid.tsx (rectangular 7×9 mesh), ABGrid.tsx (hue-sat grid), useAppStore.ts, colorUtils.ts for full context
+- Completely rewrote `/src/components/lut-atelier/grids/CLGrid.tsx` with circular octagonal mesh architecture
+- **Background**: Circular chroma-luminance gradient rendered pixel-by-pixel via ImageData
+  - Angle from center (0° top, clockwise) → Luminance (0% to 100%)
+  - Distance from center → Chroma (0% at center to 100% at edge)
+  - Base hue 30° (warm amber) via `hslToRgb(30, chroma, luminance)`
+  - Vignette darkening edges, 8 radial grid lines at 45° intervals, 4 concentric circles
+- **Octagonal mesh structure (25 nodes total)**:
+  - Ring 0: 1 center node (radius 8px, ambient amber glow)
+  - Ring 1: 8 nodes at 0.24 radius fraction, angles 0°/45°/…/315°
+  - Ring 2: 8 nodes at 0.50 radius fraction, angles 22.5°/67.5°/…/337.5° (offset)
+  - Ring 3: 8 nodes at 0.78 radius fraction, angles 0°/45°/…/315°
+- **Mesh connections (64 total)**:
+  - 8 radial: Center → each Ring 1
+  - 16 cross: Ring 1[i] → Ring 2[i] and Ring 2[(i+7)%8]
+  - 16 cross: Ring 2[i] → Ring 3[i] and Ring 3[(i+1)%8]
+  - 24 circumferential: 8 per ring
+- **Mesh fill**: 40 triangular cells filled with chroma-luminance color sampled at cell centroid (alpha 0.15)
+- **Branch-based dragging**: 8 branches (one per Ring 1 spoke); Ring 2 and Ring 3 nodes assigned to nearest branch; Gaussian falloff (σ=1.5 ring units); center drag affects all branches; max drag 15% of canvas dimension
+- **Node visuals**: Regular 5px white/dark-border circles; Center 8px with amber glow; selected amber glow; hovered white glow; dragged slightly larger; inner dark dot for offset indicator
+- **Helper lines**: Dashed home→current lines when showNodeHelpers is true, with small origin dot
+- **Double-click**: Resets entire branch (or all nodes if center)
+- **Store integration**: selectedNodeId, setSelectedNodeId, showNodeHelpers via useAppStore
+- **Performance**: Dual canvas (bg on resize only, overlay on interaction), requestAnimationFrame, refs for high-frequency state, useAppStore.getState() inside drawOverlay
+- **HiDPI**: Full devicePixelRatio support on both canvases
+- **Tooltip**: Color swatch hsl(30, C%, L%), "L: X% C: Y%" text, offset display
+- **Layout**: aspect-square with minHeight 250, specified header with emerald dot
+- Framer Motion entrance animation
+- Zero ESLint errors, zero TypeScript errors
+
+Stage Summary:
+- CLGrid completely rebuilt as circular octagonal mesh editor (25 nodes, 64 connections, 40 triangular fill cells)
+- Circular chroma-luminance gradient background with warm amber hue, vignette, and subtle grid overlay
+- Branch-based dragging system with Gaussian falloff affecting same-branch nodes
+- Production-ready with HiDPI support, responsive ResizeObserver, and optimized rendering pipeline
+
+---
+Task ID: 10
+Agent: ABGrid Rebuild Agent
+Task: Rebuild ABGrid component with octagonal mesh control on polar hue-saturation color wheel
+
+Work Log:
+- Read existing ABGrid.tsx (linear hue-sat grid with bezier curves), useAppStore.ts, colorUtils.ts for full context
+- Completely rewrote `/src/components/lut-atelier/grids/ABGrid.tsx` with polar hue wheel + octagonal mesh architecture
+- **Background**: Polar hue-saturation color wheel rendered pixel-by-pixel via ImageData
+  - Angle from center (0° top, clockwise) → Hue (0° to 360°)
+  - Distance from center → Saturation (0% at center to 100% at edge)
+  - Lightness fixed at 50% via `hslToRgb(hue, sat, 50)`
+  - Vignette: radial gradient darkening edges (35% quadratic falloff)
+  - Subtle grid overlay: 8 radial lines at 45° intervals, 4 concentric circles at ring radii (0.24, 0.50, 0.78, 1.0)
+- **Octagonal mesh structure (25 nodes total)**:
+  - Ring 0: 1 CENTER node (radius 8px, prominent amber glow by default)
+  - Ring 1: 8 nodes at 0.24 radius fraction, angles 0°/45°/90°/…/315° (top-clockwise)
+  - Ring 2: 8 nodes at 0.50 radius fraction, angles 22.5°/67.5°/…/337.5° (offset by half-sector)
+  - Ring 3: 8 nodes at 0.78 radius fraction, angles 0°/45°/…/315° (aligned with Ring 1)
+- **Mesh connections (64 total)**:
+  - 8 radial: Center → each Ring 1 node
+  - 16 cross-ring: Ring 1[i] → Ring 2[i] and Ring 2[(i+7)%8]
+  - 16 cross-ring: Ring 2[i] → Ring 3[i] and Ring 3[(i+1)%8]
+  - 24 circumferential: 8 per ring connecting adjacent nodes in order
+- **Mesh fill (40 triangular cells)**:
+  - 8 sectors from center to Ring 1
+  - 16 triangles between Ring 1 and Ring 2 (2 per sector)
+  - 16 triangles between Ring 2 and Ring 3 (2 per sector)
+  - Each triangle filled with hue wheel color sampled at centroid (alpha 0.15)
+- **Branch-based dragging**:
+  - 8 branches defined by Ring 1 nodes at 0°/45°/…/315°
+  - Ring 2/3 nodes assigned to nearest Ring 1 branch by index
+  - Center node belongs to all branches
+  - Dragging affects same-branch nodes with Gaussian falloff (σ=1.5 ring units)
+  - Center drag propagates to all nodes with ring-distance falloff
+  - Max drag distance: 15% of canvas dimension, clamped per axis
+  - Double-click resets entire branch (or all nodes if center)
+- **Node visuals**:
+  - Regular: 5px white (rgba 255,255,255,0.9) with dark border (rgba 0,0,0,0.4)
+  - Center: 8px, always has amber glow (rgba 255,191,64,0.5)
+  - Selected: brighter white fill, amber glow
+  - Hovered: white glow (rgba 255,255,255,0.3)
+  - Dragged: radius + 1.5px, white glow
+  - Offset indicator: 2px dark inner dot when offset exists
+- **Helper lines**: Dashed home→current lines (visible when showNodeHelpers store flag is true), with small home position dot
+- **Store integration**: selectedNodeId, setSelectedNodeId, showNodeHelpers via useAppStore; store changes trigger overlay redraws via subscribe()
+- **Performance**: Dual canvas architecture — background canvas (hue wheel, only redrawn on resize) + overlay canvas (mesh fill, connections, helpers, nodes — redrawn on every interaction); requestAnimationFrame-batched rendering; all high-frequency state (isDragging, hoverNodeId, dragNodeId, nodes) stored in refs; drawOverlay reads latest store values via useAppStore.getState()
+- **HiDPI**: Full devicePixelRatio support on both canvases
+- **Resize handling**: ResizeObserver with offset clamping to new max distance, drag cancellation on resize
+- **Global mouseup**: window-level listener ensures drag ends even if pointer leaves canvas
+- **Tooltip**: Color swatch from underlying hue at position, "H: X° S: Y%" text, offset display when node has offset
+- **Layout**: aspect-square (replacing old aspect-[16/10]) with minHeight 250; specified header bar with amber dot, "Hue / Saturation" label, usage hints
+- **Immutability**: All node mutations use spread operator pattern (`ns[i] = { ...ns[i], offsetX, offsetY }`) to satisfy react-hooks/immutability lint rule
+- Framer Motion entrance animation on outer container
+- Zero ESLint errors, zero TypeScript errors
+
+Stage Summary:
+- ABGrid completely rebuilt as polar hue-saturation wheel with octagonal mesh overlay (25 nodes, 64 connections, 40 triangular fill cells)
+- Pixel-level hue wheel background with vignette and grid overlay, rendered via ImageData for performance
+- Branch-based dragging system with Gaussian falloff for organic, localized hue/sat adjustments
+- Production-ready with HiDPI, responsive sizing, optimized dual-canvas rendering pipeline
+
+---
+Task ID: 11
+Agent: Main Orchestrator
+Task: Fix image zoom functionality and redesign grid panels with octagonal mesh structure
+
+Work Log:
+- Fixed ImageViewer zoom: replaced broken string-based zoom ('fit'|'100'|'200') with numeric percentage system
+  - Zoom state: 0 = fit-to-view, positive number = actual zoom %
+  - Added zoomIn/zoomOut buttons (±25% per click), Ctrl+Scroll wheel zoom
+  - Image dimensions calculated from zoom% × natural dimensions
+  - Scrollable when zoomed past fit, centered when at fit
+  - Auto-resets zoom when image changes
+- Completely redesigned ABGrid with octagonal mesh structure on polar hue-saturation wheel background
+- Completely redesigned CLGrid with octagonal mesh structure on circular chroma-luminance gradient background
+- Updated Workspace grid panel: widened to 400px, renamed header to "Color Control", updated tab labels to "Hue/Sat" and "Chr/Lum"
+
+Stage Summary:
+- Zoom now works properly with real % sizing, zoom in/out, Ctrl+Scroll, and auto-reset
+- Both A/B and C/L grids redesigned with identical octagonal mesh topology (25 nodes, 64 connections, 40 triangles)
+- A/B grid uses polar hue wheel background (angle=hue, distance=saturation)
+- C/L grid uses circular chroma-luminance gradient (angle=luminance, distance=chroma, warm amber hue)
+- Both grids feature branch-based dragging with Gaussian falloff, independent branch adjustment

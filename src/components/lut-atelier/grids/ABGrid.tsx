@@ -1,25 +1,25 @@
 'use client';
 
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { useAppStore, type GridNode } from '@/store/useAppStore';
-import { hslToRgb, isSkinToneHue, hslString } from '@/lib/colorUtils';
+import { useAppStore } from '@/store/useAppStore';
+import { hslToRgb } from '@/lib/colorUtils';
 
-// ─── Props ───────────────────────────────────────────────────────────────────
-interface ABGridProps {
-  className?: string;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Types
+// ═══════════════════════════════════════════════════════════════════════════════
+
+interface MeshNode {
+  id: string;
+  ring: number;       // 0 = center, 1/2/3 = ring index
+  index: number;      // 0 for center, 0-7 for outer rings
+  branch: number;     // 0-7 angular branch (-1 = center, belongs to all)
+  angleRad: number;   // home angle (radians, clockwise from top)
+  radiusFrac: number; // home radius as fraction of maxR
+  offsetX: number;    // pixel offset from home position
+  offsetY: number;
 }
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const NODE_RADIUS = 7;
-const NODE_HIT_RADIUS = 14;
-const SKIN_TONE_HUE_MIN = 10;
-const SKIN_TONE_HUE_MAX = 50;
-const GRID_LINE_HUES = 12; // lines every 30°
-const GRID_LINE_SATS = 4;  // lines at 25%, 50%, 75%
-const PADDING = 0; // internal canvas padding
-
-// ─── Types ───────────────────────────────────────────────────────────────────
 interface TooltipData {
   x: number;
   y: number;
@@ -30,593 +30,756 @@ interface TooltipData {
   isDragging: boolean;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════════
 
-/** Convert a hue (0-360) and saturation (0-100) to canvas pixel coordinates */
-function hueSatToCanvas(
-  hue: number,
-  saturation: number,
-  w: number,
-  h: number
-): { x: number; y: number } {
-  return {
-    x: PADDING + (hue / 360) * (w - 2 * PADDING),
-    y: PADDING + (1 - saturation / 100) * (h - 2 * PADDING), // top = 100%, bottom = 0%
-  };
-}
+const NODE_RADIUS = 5;
+const CENTER_RADIUS = 8;
+const HIT_RADIUS = 14;
+const MAX_DRAG_FRAC = 0.15;
+const SIGMA = 1.5;
+const TWO_PI = Math.PI * 2;
+const INV_TWO_PI = 1 / TWO_PI;
 
-/** Convert canvas pixel coordinates to hue/saturation */
-function canvasToHueSat(
+// ═══════════════════════════════════════════════════════════════════════════════
+// Mesh topology — computed once at module level (25 nodes, 64 connections,
+// 40 fill triangles)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const INITIAL_NODES: MeshNode[] = (() => {
+  const out: MeshNode[] = [];
+  // Ring 0 — center
+  out.push({
+    id: 'ab-c', ring: 0, index: 0, branch: -1,
+    angleRad: 0, radiusFrac: 0, offsetX: 0, offsetY: 0,
+  });
+  // Ring 1 — 8 nodes at 0.24 radius, 0°/45°/…/315°
+  for (let i = 0; i < 8; i++) {
+    out.push({
+      id: `ab-1-${i}`, ring: 1, index: i, branch: i,
+      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.24,
+      offsetX: 0, offsetY: 0,
+    });
+  }
+  // Ring 2 — 8 nodes at 0.50 radius, offset by 22.5°
+  for (let i = 0; i < 8; i++) {
+    out.push({
+      id: `ab-2-${i}`, ring: 2, index: i, branch: i,
+      angleRad: (i / 8) * TWO_PI + Math.PI / 8, radiusFrac: 0.50,
+      offsetX: 0, offsetY: 0,
+    });
+  }
+  // Ring 3 — 8 nodes at 0.78 radius, same angles as Ring 1
+  for (let i = 0; i < 8; i++) {
+    out.push({
+      id: `ab-3-${i}`, ring: 3, index: i, branch: i,
+      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.78,
+      offsetX: 0, offsetY: 0,
+    });
+  }
+  return out;
+})();
+
+// Node-array index offsets
+const C = 0;    // center
+const R1 = 1;   // ring-1 start
+const R2 = 9;   // ring-2 start
+const R3 = 17;  // ring-3 start
+
+// ── 64 connections ─────────────────────────────────────────────────────────
+
+const CONNS: [number, number][] = [
+  // center → ring-1  (8)
+  ...Array.from({ length: 8 }, (_, i) => [C, R1 + i] as [number, number]),
+  // ring-1 circumferential  (8)
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R1 + (i + 1) % 8] as [number, number]),
+  // ring-2 circumferential  (8)
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R2 + (i + 1) % 8] as [number, number]),
+  // ring-3 circumferential  (8)
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R3 + (i + 1) % 8] as [number, number]),
+  // ring-1 → ring-2  (16)
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + i] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + (i + 7) % 8] as [number, number]),
+  // ring-2 → ring-3  (16)
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8] as [number, number]),
+];
+
+// ── 40 fill triangles ──────────────────────────────────────────────────────
+
+const TRIS: [number, number, number][] = [
+  // center → ring-1  (8 sectors)
+  ...Array.from({ length: 8 }, (_, i) => [C, R1 + i, R1 + (i + 1) % 8] as [number, number]),
+  // ring-1 → ring-2  (16 triangles)
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + (i + 7) % 8, R2 + i] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + i, R1 + (i + 1) % 8] as [number, number]),
+  // ring-2 → ring-3  (16 triangles)
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i, R3 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8, R2 + (i + 1) % 8] as [number, number]),
+];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Pure helpers (no closures over component state)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Polar (angle clockwise-from-top in rad, radius fraction) → canvas pixel. */
+function polarToXY(
+  angle: number,
+  rFrac: number,
   cx: number,
   cy: number,
-  w: number,
-  h: number
+  maxR: number,
+): [number, number] {
+  return [
+    cx + maxR * rFrac * Math.sin(angle),
+    cy - maxR * rFrac * Math.cos(angle),
+  ];
+}
+
+/** Canvas pixel → polar (angle, distance from center). */
+function xyToPolar(x: number, y: number, cx: number, cy: number) {
+  const dx = x - cx;
+  const dy = -(y - cy);
+  let a = Math.atan2(dx, dy);
+  if (a < 0) a += TWO_PI;
+  return { angle: a, dist: Math.sqrt(dx * dx + dy * dy) };
+}
+
+/** Node's current position (home + offset) in canvas pixels. */
+function nodeXY(n: MeshNode, cx: number, cy: number, maxR: number): [number, number] {
+  const [hx, hy] = polarToXY(n.angleRad, n.radiusFrac, cx, cy, maxR);
+  return [hx + n.offsetX, hy + n.offsetY];
+}
+
+/** Node's home position (no offset) in canvas pixels. */
+function homeXY(n: MeshNode, cx: number, cy: number, maxR: number): [number, number] {
+  return polarToXY(n.angleRad, n.radiusFrac, cx, cy, maxR);
+}
+
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** Get hue/saturation at a canvas position (for tooltip display). */
+function hueSatAt(
+  x: number,
+  y: number,
+  cx: number,
+  cy: number,
+  maxR: number,
 ): { hue: number; saturation: number } {
-  const hue = ((cx - PADDING) / (w - 2 * PADDING)) * 360;
-  const saturation = (1 - (cy - PADDING) / (h - 2 * PADDING)) * 100;
-  return {
-    hue: Math.max(0, Math.min(360, hue)),
-    saturation: Math.max(0, Math.min(100, saturation)),
-  };
+  const { angle, dist } = xyToPolar(x, y, cx, cy);
+  const hue = Math.round(angle * INV_TWO_PI * 3600) / 10;
+  const saturation = Math.round(clamp((dist / maxR) * 1000, 0, 1000)) / 10;
+  return { hue, saturation };
 }
 
-/** Compute the offset in hue/sat units from a pixel delta */
-function pixelDeltaToHueSatDelta(dx: number, dy: number, w: number, h: number) {
-  return {
-    dhue: (dx / (w - 2 * PADDING)) * 360,
-    dsat: -(dy / (h - 2 * PADDING)) * 100,
-  };
+/** Find the node index closest to (mx, my) within hit radius, or -1. */
+function hitTest(
+  nodes: MeshNode[],
+  cx: number,
+  cy: number,
+  maxR: number,
+  mx: number,
+  my: number,
+): number {
+  let best = -1;
+  let bestD = Infinity;
+  for (let i = 0; i < nodes.length; i++) {
+    const [nx, ny] = nodeXY(nodes[i], cx, cy, maxR);
+    const d = Math.hypot(mx - nx, my - ny);
+    const hr = nodes[i].ring === 0 ? CENTER_RADIUS + 6 : HIT_RADIUS;
+    if (d < hr && d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
-/** Get distance between two points */
-function dist(x1: number, y1: number, x2: number, y2: number): number {
-  return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
-}
+// ═══════════════════════════════════════════════════════════════════════════════
+// Component
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── Component ───────────────────────────────────────────────────────────────
-export default function ABGrid({ className = '' }: ABGridProps) {
+export default function ABGrid({ className = '' }: { className?: string }) {
+  // ── DOM refs ─────────────────────────────────────────────────────────────
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const bgCanvasRef = useRef<HTMLCanvasElement>(null);
-  const rafRef = useRef<number>(0);
-  const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  const bgRef = useRef<HTMLCanvasElement>(null);
+  const olRef = useRef<HTMLCanvasElement>(null);
+  const rafRef = useRef(0);
 
-  // Interaction state
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
-  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
-  const [tooltip, setTooltip] = useState<TooltipData | null>(null);
-  const [canvasReady, setCanvasReady] = useState(false);
-  const dragStartRef = useRef<{ x: number; y: number; nodeHue: number; nodeSat: number; origOffsetX: number; origOffsetY: number } | null>(null);
+  // ── Mutable interaction state (refs to avoid re-renders) ─────────────────
+  const sizeRef = useRef({ w: 0, h: 0 });
+  const nodesRef = useRef<MeshNode[]>(INITIAL_NODES.map((n) => ({ ...n })));
+  const draggingRef = useRef(false);
+  const dragIdxRef = useRef(-1);
+  const hoverIdxRef = useRef(-1);
+  const dragStartRef = useRef<{
+    mx: number;
+    my: number;
+    bases: Float64Array;
+  } | null>(null);
 
-  // Zustand store
-  const abNodes = useAppStore((s) => s.abNodes);
-  const updateABNode = useAppStore((s) => s.updateABNode);
-  const selectedNodeId = useAppStore((s) => s.selectedNodeId);
+  // ── React state (only for tooltip + CSS-size-dependent JSX) ─────────────
+  const [cssSize, setCssSize] = useState({ w: 0, h: 0 });
+  const [tip, setTip] = useState<TooltipData | null>(null);
+
+  // ── Store (only the three values specified in the design) ────────────────
   const setSelectedNodeId = useAppStore((s) => s.setSelectedNodeId);
-  const showNodeHelpers = useAppStore((s) => s.showNodeHelpers);
-  const showSkinToneLine = useAppStore((s) => s.settings.showSkinToneLine);
 
-  // ─── Node map for quick lookup ───────────────────────────────────────────
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, GridNode>();
-    for (const node of abNodes) map.set(node.id, node);
-    return map;
-  }, [abNodes]);
+  // ══════════════════════════════════════════════════════════════════════════
+  // Background canvas — redrawn only on resize
+  // ══════════════════════════════════════════════════════════════════════════
 
-  // ─── Nodes grouped by saturation for bezier curves ───────────────────────
-  const nodesBySat = useMemo(() => {
-    const groups = new Map<number, GridNode[]>();
-    for (const node of abNodes) {
-      const sat = node.saturation;
-      if (!groups.has(sat)) groups.set(sat, []);
-      groups.get(sat)!.push(node);
-    }
-    // Sort each group by hue
-    for (const [, nodes] of groups) {
-      nodes.sort((a, b) => a.hue - b.hue);
-    }
-    return groups;
-  }, [abNodes]);
-
-  // ─── Render the background hue-saturation spectrum ───────────────────────
-  const renderBackground = useCallback(
-    (w: number, h: number) => {
-      const bgCanvas = bgCanvasRef.current;
-      if (!bgCanvas) return;
-      bgCanvas.width = w * window.devicePixelRatio;
-      bgCanvas.height = h * window.devicePixelRatio;
-      bgCanvas.style.width = `${w}px`;
-      bgCanvas.style.height = `${h}px`;
-      const bgCtx = bgCanvas.getContext('2d');
-      if (!bgCtx) return;
-      bgCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-      // Use ImageData for fast pixel-by-pixel rendering
-      const imageData = bgCtx.createImageData(w, h);
-      const data = imageData.data;
-
-      for (let y = 0; y < h; y++) {
-        const satRatio = 1 - y / h; // top = 100%, bottom = 0%
-        for (let x = 0; x < w; x++) {
-          const hue = (x / w) * 360;
-          const sat = satRatio * 100;
-          const [r, g, b] = hslToRgb(hue, sat, 50);
-          const idx = (y * w + x) * 4;
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-          data[idx + 3] = 255;
-        }
-      }
-
-      bgCtx.putImageData(imageData, 0, 0);
-    },
-    []
-  );
-
-  // ─── Main draw function ──────────────────────────────────────────────────
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    const bgCanvas = bgCanvasRef.current;
-    if (!canvas || !bgCanvas) return;
-
-    const { w, h } = sizeRef.current;
-    if (w === 0 || h === 0) return;
+  const drawBg = useCallback((w: number, h: number) => {
+    const cv = bgRef.current;
+    if (!cv || w < 1) return;
 
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
+    const iw = Math.round(w * dpr);
+    const ih = Math.round(h * dpr);
+    cv.width = iw;
+    cv.height = ih;
+    cv.style.width = `${w}px`;
+    cv.style.height = `${h}px`;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const ctx = cv.getContext('2d')!;
+    const img = ctx.createImageData(iw, ih);
+    const d = img.data;
+    const cx = iw / 2;
+    const cy = ih / 2;
+    const mr = Math.min(cx, cy) * 0.95;
+    const mr2 = mr * mr;
+
+    // Pixel-by-pixel hue wheel via ImageData
+    for (let py = 0; py < ih; py++) {
+      const dy = py - cy;
+      const dy2 = dy * dy;
+      for (let px = 0; px < iw; px++) {
+        const dx = px - cx;
+        const dist2 = dx * dx + dy2;
+        const idx = (py * iw + px) << 2;
+
+        if (dist2 <= mr2) {
+          const dist = Math.sqrt(dist2);
+          let a = Math.atan2(dx, -dy);
+          if (a < 0) a += TWO_PI;
+          const hue = a * INV_TWO_PI * 360;
+          const sat = (dist / mr) * 100;
+          const [r, g, b] = hslToRgb(hue, sat, 50);
+          // Subtle vignette
+          const vig = 1 - (dist / mr) ** 2 * 0.35;
+          d[idx] = (r * vig) | 0;
+          d[idx + 1] = (g * vig) | 0;
+          d[idx + 2] = (b * vig) | 0;
+          d[idx + 3] = 255;
+        } else {
+          d[idx] = 10;
+          d[idx + 1] = 10;
+          d[idx + 2] = 10;
+          d[idx + 3] = 255;
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+
+    // Grid overlay lines (drawn once on the background canvas)
+    ctx.save();
     ctx.scale(dpr, dpr);
+    const scx = w / 2;
+    const scy = h / 2;
+    const smr = Math.min(scx, scy) * 0.95;
 
-    // 1. Clear and draw background
+    // 8 radial lines at 45° intervals
+    ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 0.5;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * TWO_PI;
+      ctx.beginPath();
+      ctx.moveTo(scx, scy);
+      ctx.lineTo(scx + smr * Math.sin(a), scy - smr * Math.cos(a));
+      ctx.stroke();
+    }
+
+    // 4 concentric circles at ring boundaries
+    const radii = [0.24, 0.50, 0.78, 1.0];
+    for (const rf of radii) {
+      ctx.beginPath();
+      ctx.arc(scx, scy, smr * rf, 0, TWO_PI);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }, []);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Overlay canvas — redrawn on every interaction
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const drawOl = useCallback(() => {
+    const cv = olRef.current;
+    if (!cv) return;
+    const { w, h } = sizeRef.current;
+    if (w < 1) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    const ctx = cv.getContext('2d')!;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    ctx.drawImage(bgCanvas, 0, 0, w, h);
 
-    // 2. Skin tone indicator
-    if (showSkinToneLine) {
-      const x1 = hueSatToCanvas(SKIN_TONE_HUE_MIN, 0, w, h).x;
-      const x2 = hueSatToCanvas(SKIN_TONE_HUE_MAX, 0, w, h).x;
+    const ns = nodesRef.current;
+    const cx = w / 2;
+    const cy = h / 2;
+    const mr = Math.min(cx, cy) * 0.95;
+    const di = dragIdxRef.current;
+    const hi = hoverIdxRef.current;
+    const isDrag = draggingRef.current;
+    const selId = useAppStore.getState().selectedNodeId;
+    const helpers = useAppStore.getState().showNodeHelpers;
 
-      // Subtle warm overlay
-      const grad = ctx.createLinearGradient(x1, 0, x2, 0);
-      grad.addColorStop(0, 'rgba(255, 180, 120, 0)');
-      grad.addColorStop(0.15, 'rgba(255, 180, 120, 0.08)');
-      grad.addColorStop(0.5, 'rgba(255, 180, 120, 0.12)');
-      grad.addColorStop(0.85, 'rgba(255, 180, 120, 0.08)');
-      grad.addColorStop(1, 'rgba(255, 180, 120, 0)');
-      ctx.fillStyle = grad;
-      ctx.fillRect(x1, 0, x2 - x1, h);
+    // Pre-compute positions
+    const pos = ns.map((n) => nodeXY(n, cx, cy, mr));
+    const hom = ns.map((n) => homeXY(n, cx, cy, mr));
 
-      // Edge lines
-      ctx.strokeStyle = 'rgba(255, 200, 150, 0.25)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
+    // 1. ── Mesh fill (40 triangles) ──────────────────────────────────────
+    for (const [ai, bi, ci] of TRIS) {
+      const ax = pos[ai][0], ay = pos[ai][1];
+      const bx = pos[bi][0], by = pos[bi][1];
+      const ccx = pos[ci][0], ccy = pos[ci][1];
+
+      // Centroid color
+      const mx = (ax + bx + ccx) / 3;
+      const my = (ay + by + ccy) / 3;
+      const { hue, saturation: sat } = hueSatAt(mx, my, cx, cy, mr);
+      const [r, g, b] = hslToRgb(hue, sat, 50);
+
       ctx.beginPath();
-      ctx.moveTo(x1, 0);
-      ctx.lineTo(x1, h);
-      ctx.moveTo(x2, 0);
-      ctx.lineTo(x2, h);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Label
-      ctx.save();
-      ctx.font = '10px system-ui, -apple-system, sans-serif';
-      ctx.fillStyle = 'rgba(255, 220, 180, 0.6)';
-      ctx.textAlign = 'center';
-      ctx.fillText('SKIN', (x1 + x2) / 2, 14);
-      ctx.restore();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(bx, by);
+      ctx.lineTo(ccx, ccy);
+      ctx.closePath();
+      ctx.fillStyle = `rgba(${r},${g},${b},0.15)`;
+      ctx.fill();
     }
 
-    // 3. Grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-    ctx.lineWidth = 1;
-
-    // Vertical lines (hue divisions)
-    for (let i = 0; i <= GRID_LINE_HUES; i++) {
-      const hue = (i / GRID_LINE_HUES) * 360;
-      const { x } = hueSatToCanvas(hue, 0, w, h);
+    // 2. ── Mesh connections (64 lines) ───────────────────────────────────
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 0.75;
+    for (const [ai, bi] of CONNS) {
       ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
+      ctx.moveTo(pos[ai][0], pos[ai][1]);
+      ctx.lineTo(pos[bi][0], pos[bi][1]);
       ctx.stroke();
     }
 
-    // Horizontal lines (saturation divisions)
-    for (let i = 1; i <= GRID_LINE_SATS; i++) {
-      const sat = (i / (GRID_LINE_SATS + 1)) * 100;
-      const { y } = hueSatToCanvas(0, sat, w, h);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    // 4. Bezier curves connecting nodes (showing color "bend")
-    for (const [, satNodes] of nodesBySat) {
-      if (satNodes.length < 2) continue;
-
-      // Draw the curve through nodes (original positions)
-      ctx.beginPath();
-      const first = satNodes[0];
-      const firstPos = hueSatToCanvas(first.hue, first.saturation, w, h);
-      ctx.moveTo(firstPos.x, firstPos.y);
-
-      for (let i = 1; i < satNodes.length; i++) {
-        const prev = satNodes[i - 1];
-        const curr = satNodes[i];
-        const prevPos = hueSatToCanvas(prev.hue, prev.saturation, w, h);
-        const currPos = hueSatToCanvas(curr.hue, curr.saturation, w, h);
-        const cpx = (prevPos.x + currPos.x) / 2;
-        ctx.quadraticCurveTo(prevPos.x, prevPos.y, cpx, (prevPos.y + currPos.y) / 2);
-      }
-      // Final point
-      const lastNode = satNodes[satNodes.length - 1];
-      const lastPos = hueSatToCanvas(lastNode.hue, lastNode.saturation, w, h);
-      ctx.lineTo(lastPos.x, lastPos.y);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Draw the offset curves (showing the bend)
-      ctx.beginPath();
-      const firstOff = hueSatToCanvas(
-        first.hue + first.offsetX * 0.6,
-        Math.max(0, Math.min(100, first.saturation + first.offsetY * 0.3)),
-        w,
-        h
-      );
-      ctx.moveTo(firstOff.x, firstOff.y);
-
-      for (let i = 1; i < satNodes.length; i++) {
-        const prev = satNodes[i - 1];
-        const curr = satNodes[i];
-        const prevOff = hueSatToCanvas(
-          prev.hue + prev.offsetX * 0.6,
-          Math.max(0, Math.min(100, prev.saturation + prev.offsetY * 0.3)),
-          w,
-          h
-        );
-        const currOff = hueSatToCanvas(
-          curr.hue + curr.offsetX * 0.6,
-          Math.max(0, Math.min(100, curr.saturation + curr.offsetY * 0.3)),
-          w,
-          h
-        );
-        const cpx = (prevOff.x + currOff.x) / 2;
-        ctx.quadraticCurveTo(prevOff.x, prevOff.y, cpx, (prevOff.y + currOff.y) / 2);
-      }
-      const lastOff = hueSatToCanvas(
-        lastNode.hue + lastNode.offsetX * 0.6,
-        Math.max(0, Math.min(100, lastNode.saturation + lastNode.offsetY * 0.3)),
-        w,
-        h
-      );
-      ctx.lineTo(lastOff.x, lastOff.y);
-
-      // Color the offset curve based on the saturation level
-      const satColor = hslString(0, 0, 100, 0.3);
-      ctx.strokeStyle = satColor;
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // 5. Draw helper lines and nodes
-    for (const node of abNodes) {
-      const basePos = hueSatToCanvas(node.hue, node.saturation, w, h);
-      const offsetHue = node.hue + node.offsetX * 0.6;
-      const offsetSat = Math.max(0, Math.min(100, node.saturation + node.offsetY * 0.3));
-      const offsetPos = hueSatToCanvas(offsetHue, offsetSat, w, h);
-
-      const isSelected = node.id === selectedNodeId;
-      const isHovered = node.id === hoverNodeId;
-      const isBeingDragged = node.id === dragNodeId && isDragging;
-      const hasOffset = node.offsetX !== 0 || node.offsetY !== 0;
-
-      // Helper line from original to offset position
-      if (showNodeHelpers && hasOffset) {
+    // 3. ── Helper lines (home → current when offset exists) ──────────────
+    if (helpers) {
+      for (let i = 0; i < ns.length; i++) {
+        if (ns[i].offsetX === 0 && ns[i].offsetY === 0) continue;
+        const isSel = ns[i].id === selId;
         ctx.beginPath();
-        ctx.moveTo(basePos.x, basePos.y);
-        ctx.lineTo(offsetPos.x, offsetPos.y);
-        ctx.strokeStyle = isSelected
-          ? 'rgba(255, 255, 255, 0.7)'
-          : 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = isSelected ? 1.5 : 1;
+        ctx.moveTo(hom[i][0], hom[i][1]);
+        ctx.lineTo(pos[i][0], pos[i][1]);
+        ctx.strokeStyle = isSel
+          ? 'rgba(255,255,255,0.7)'
+          : 'rgba(255,255,255,0.35)';
+        ctx.lineWidth = isSel ? 1.5 : 1;
         ctx.setLineDash([3, 3]);
         ctx.stroke();
         ctx.setLineDash([]);
 
-        // Origin dot (small)
+        // Home position dot
         ctx.beginPath();
-        ctx.arc(basePos.x, basePos.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.arc(hom[i][0], hom[i][1], 2.5, 0, TWO_PI);
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
         ctx.fill();
       }
+    }
 
-      // Glow effect for selected or hovered
-      if (isSelected || isHovered || isBeingDragged) {
+    // 4. ── Nodes (25 total) ──────────────────────────────────────────────
+    for (let i = 0; i < ns.length; i++) {
+      const n = ns[i];
+      const nx = pos[i][0];
+      const ny = pos[i][1];
+      const isCenter = n.ring === 0;
+      const isSel = n.id === selId;
+      const isHov = i === hi;
+      const isDrg = i === di && isDrag;
+      const hasOff = n.offsetX !== 0 || n.offsetY !== 0;
+      const baseR = isCenter ? CENTER_RADIUS : NODE_RADIUS;
+      const r = isDrg ? baseR + 1.5 : baseR;
+
+      // Glow
+      const needsGlow = isSel || isHov || isDrg || isCenter;
+      if (needsGlow) {
+        const gr = r + 8;
         ctx.beginPath();
-        ctx.arc(offsetPos.x, offsetPos.y, NODE_RADIUS + 6, 0, Math.PI * 2);
-        const glowGrad = ctx.createRadialGradient(
-          offsetPos.x, offsetPos.y, NODE_RADIUS,
-          offsetPos.x, offsetPos.y, NODE_RADIUS + 6
-        );
-        if (isSelected) {
-          glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.35)');
-          glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.arc(nx, ny, gr, 0, TWO_PI);
+        const gd = ctx.createRadialGradient(nx, ny, r, nx, ny, gr);
+        if (isDrg) {
+          gd.addColorStop(0, 'rgba(255,255,255,0.3)');
+          gd.addColorStop(1, 'rgba(255,255,255,0)');
+        } else if (isSel || isCenter) {
+          gd.addColorStop(0, 'rgba(255,191,64,0.5)');
+          gd.addColorStop(1, 'rgba(255,191,64,0)');
         } else {
-          glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.2)');
-          glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+          // Hovered
+          gd.addColorStop(0, 'rgba(255,255,255,0.3)');
+          gd.addColorStop(1, 'rgba(255,255,255,0)');
         }
-        ctx.fillStyle = glowGrad;
+        ctx.fillStyle = gd;
         ctx.fill();
       }
 
       // Node circle
       ctx.beginPath();
-      ctx.arc(offsetPos.x, offsetPos.y, isBeingDragged ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
-
-      // Fill with the color at the offset position
-      const [nr, ng, nb] = hslToRgb(offsetHue, node.saturation, 50);
-      ctx.fillStyle = `rgb(${nr}, ${ng}, ${nb})`;
+      ctx.arc(nx, ny, r, 0, TWO_PI);
+      ctx.fillStyle = isSel ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.9)';
       ctx.fill();
-
-      // White border
-      ctx.strokeStyle = isSelected
-        ? 'rgba(255, 255, 255, 1)'
-        : isHovered
-          ? 'rgba(255, 255, 255, 0.85)'
-          : 'rgba(255, 255, 255, 0.55)';
-      ctx.lineWidth = isSelected ? 2.5 : 2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Inner dot (offset indicator)
-      if (hasOffset) {
+      // Inner offset dot
+      if (hasOff && !isCenter) {
         ctx.beginPath();
-        ctx.arc(offsetPos.x, offsetPos.y, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.arc(nx, ny, 2, 0, TWO_PI);
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fill();
       }
     }
+  }, []);
 
-    // 6. Axis labels
-    ctx.save();
-    ctx.font = '9px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+  /** Schedule an overlay redraw via requestAnimationFrame (debounced). */
+  const sched = useCallback(() => {
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(drawOl);
+  }, [drawOl]);
 
-    // Hue labels
-    const hueLabels = [0, 60, 120, 180, 240, 300];
-    for (const hue of hueLabels) {
-      const { x } = hueSatToCanvas(hue, 0, w, h);
-      ctx.textAlign = 'center';
-      ctx.fillText(`${hue}°`, x, h - 4);
-    }
+  // ══════════════════════════════════════════════════════════════════════════
+  // Resize handling
+  // ══════════════════════════════════════════════════════════════════════════
 
-    // Saturation labels
-    const satLabels = [100, 75, 50, 25, 0];
-    for (const sat of satLabels) {
-      const { y } = hueSatToCanvas(0, sat, w, h);
-      ctx.textAlign = 'left';
-      ctx.fillText(`${sat}%`, 3, y - 3);
-    }
-    ctx.restore();
-  }, [
-    abNodes,
-    selectedNodeId,
-    hoverNodeId,
-    dragNodeId,
-    isDragging,
-    showNodeHelpers,
-    showSkinToneLine,
-    nodesBySat,
-  ]);
-
-  // ─── Resize handling ─────────────────────────────────────────────────────
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const el = containerRef.current;
+    if (!el) return;
 
-    const observer = new ResizeObserver((entries) => {
+    const obs = new ResizeObserver((entries) => {
       for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          const w = Math.floor(width);
-          const h = Math.floor(height);
-          sizeRef.current = { w, h };
-          setCanvasSize({ w, h });
-          renderBackground(w, h);
-          setCanvasReady(true);
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(draw);
+        const w = Math.floor(entry.contentRect.width);
+        const h = Math.floor(entry.contentRect.height);
+        if (w < 1 || h < 1) continue;
+
+        sizeRef.current = { w, h };
+        setCssSize({ w, h });
+
+        // Cancel any in-progress drag on resize
+        draggingRef.current = false;
+        dragIdxRef.current = -1;
+        dragStartRef.current = null;
+        setTip(null);
+
+        // Clamp offsets to new max distance
+        const md = w * MAX_DRAG_FRAC;
+        const ns = nodesRef.current;
+        for (let i = 0; i < ns.length; i++) {
+          ns[i] = {
+            ...ns[i],
+            offsetX: clamp(ns[i].offsetX, -md, md),
+            offsetY: clamp(ns[i].offsetY, -md, md),
+          };
         }
+
+        // Redraw background at new size
+        drawBg(w, h);
+
+        // Size the overlay canvas
+        const ol = olRef.current;
+        if (ol) {
+          const dpr = window.devicePixelRatio || 1;
+          ol.width = w * dpr;
+          ol.height = h * dpr;
+          ol.style.width = `${w}px`;
+          ol.style.height = `${h}px`;
+        }
+
+        sched();
       }
     });
 
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, [renderBackground, draw]);
-
-  // ─── Redraw when dependencies change ─────────────────────────────────────
-  useEffect(() => {
-    if (!canvasReady) return;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(draw);
-  }, [draw, canvasReady]);
-
-  // ─── Find node under cursor ──────────────────────────────────────────────
-  const findNodeAt = useCallback(
-    (cx: number, cy: number): string | null => {
-      const { w, h } = sizeRef.current;
-      let closestId: string | null = null;
-      let closestDist = Infinity;
-
-      for (const node of abNodes) {
-        const offsetHue = node.hue + node.offsetX * 0.6;
-        const offsetSat = Math.max(0, Math.min(100, node.saturation + node.offsetY * 0.3));
-        const pos = hueSatToCanvas(offsetHue, offsetSat, w, h);
-        const d = dist(cx, cy, pos.x, pos.y);
-        if (d < NODE_HIT_RADIUS && d < closestDist) {
-          closestDist = d;
-          closestId = node.id;
-        }
-      }
-      return closestId;
-    },
-    [abNodes]
-  );
-
-  // ─── Mouse event handlers ────────────────────────────────────────────────
-  const getCanvasCoords = useCallback((e: React.MouseEvent | MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+    obs.observe(el);
+    return () => {
+      obs.disconnect();
+      cancelAnimationFrame(rafRef.current);
     };
-  }, []);
+  }, [drawBg, sched]);
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
-      const nodeId = findNodeAt(x, y);
+  // ══════════════════════════════════════════════════════════════════════════
+  // Subscribe to store changes that affect overlay rendering
+  // ══════════════════════════════════════════════════════════════════════════
 
-      if (nodeId) {
-        const node = nodeMap.get(nodeId);
-        if (node) {
-          setSelectedNodeId(nodeId);
-          setIsDragging(true);
-          setDragNodeId(nodeId);
-          dragStartRef.current = {
-            x,
-            y,
-            nodeHue: node.hue,
-            nodeSat: node.saturation,
-            origOffsetX: node.offsetX,
-            origOffsetY: node.offsetY,
-          };
-          setTooltip({
-            x,
-            y,
-            hue: node.hue,
-            saturation: node.saturation,
-            offsetX: node.offsetX,
-            offsetY: node.offsetY,
-            isDragging: true,
-          });
-        }
-      } else {
-        setSelectedNodeId(null);
-        setTooltip(null);
+  useEffect(() => {
+    const unsub = useAppStore.subscribe((s, p) => {
+      if (
+        s.selectedNodeId !== p.selectedNodeId ||
+        s.showNodeHelpers !== p.showNodeHelpers
+      ) {
+        sched();
       }
+    });
+    return unsub;
+  }, [sched]);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Global mouseup — properly end drag even if pointer leaves the canvas
+  // ══════════════════════════════════════════════════════════════════════════
+
+  useEffect(() => {
+    const onGlobalUp = () => {
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        dragIdxRef.current = -1;
+        dragStartRef.current = null;
+        sched();
+      }
+    };
+    window.addEventListener('mouseup', onGlobalUp);
+    return () => window.removeEventListener('mouseup', onGlobalUp);
+  }, [sched]);
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Mouse helpers
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const mouseXY = useCallback(
+    (e: React.MouseEvent) => {
+      const rect = olRef.current?.getBoundingClientRect();
+      return rect
+        ? { x: e.clientX - rect.left, y: e.clientY - rect.top }
+        : { x: 0, y: 0 };
     },
-    [findNodeAt, nodeMap, setSelectedNodeId, getCanvasCoords]
+    [],
   );
 
-  const handleMouseMove = useCallback(
+  // ══════════════════════════════════════════════════════════════════════════
+  // Mouse event handlers
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const onDown = useCallback(
     (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
+      const { x, y } = mouseXY(e);
+      const { w, h } = sizeRef.current;
+      const cx = w / 2;
+      const cy = h / 2;
+      const mr = Math.min(cx, cy) * 0.95;
+      const idx = hitTest(nodesRef.current, cx, cy, mr, x, y);
 
-      if (isDragging && dragNodeId && dragStartRef.current) {
-        const start = dragStartRef.current;
-        const { w, h } = sizeRef.current;
-        const dx = x - start.x;
-        const dy = y - start.y;
-        const { dhue, dsat } = pixelDeltaToHueSatDelta(dx, dy, w, h);
+      if (idx < 0) {
+        setSelectedNodeId(null);
+        setTip(null);
+        return;
+      }
 
-        // Scale offsets to -100..100 range
-        const newOffsetX = start.origOffsetX + (dhue / 360) * 100;
-        const newOffsetY = start.origOffsetY + (dsat / 100) * 100;
+      const n = nodesRef.current[idx];
+      setSelectedNodeId(n.id);
+      draggingRef.current = true;
+      dragIdxRef.current = idx;
 
-        const clampedX = Math.max(-100, Math.min(100, newOffsetX));
-        const clampedY = Math.max(-100, Math.min(100, newOffsetY));
+      // Snapshot every node's current offset as the drag base
+      const ns = nodesRef.current;
+      const bases = new Float64Array(ns.length * 2);
+      for (let i = 0; i < ns.length; i++) {
+        bases[i * 2] = ns[i].offsetX;
+        bases[i * 2 + 1] = ns[i].offsetY;
+      }
+      dragStartRef.current = { mx: x, my: y, bases };
 
-        updateABNode(dragNodeId, clampedX, clampedY);
+      // Show tooltip at drag start
+      const [nx, ny] = nodeXY(n, cx, cy, mr);
+      const hs = hueSatAt(nx, ny, cx, cy, mr);
+      setTip({
+        x,
+        y,
+        hue: hs.hue,
+        saturation: hs.saturation,
+        offsetX: n.offsetX,
+        offsetY: n.offsetY,
+        isDragging: true,
+      });
 
-        const node = nodeMap.get(dragNodeId);
-        if (node) {
-          setTooltip({
-            x,
-            y,
-            hue: node.hue,
-            saturation: node.saturation,
-            offsetX: Math.round(clampedX * 10) / 10,
-            offsetY: Math.round(clampedY * 10) / 10,
-            isDragging: true,
-          });
-        }
-      } else {
-        // Hover detection
-        const nodeId = findNodeAt(x, y);
-        setHoverNodeId(nodeId);
+      olRef.current?.style.setProperty('cursor', 'grabbing');
+      sched();
+    },
+    [mouseXY, setSelectedNodeId, sched],
+  );
 
-        if (nodeId) {
-          const node = nodeMap.get(nodeId);
-          if (node) {
-            setTooltip({
-              x,
-              y,
-              hue: node.hue,
-              saturation: node.saturation,
-              offsetX: node.offsetX,
-              offsetY: node.offsetY,
-              isDragging: false,
-            });
-            canvasRef.current?.style.setProperty('cursor', 'grab');
+  const onMove = useCallback(
+    (e: React.MouseEvent) => {
+      const { x, y } = mouseXY(e);
+      const { w, h } = sizeRef.current;
+      const cx = w / 2;
+      const cy = h / 2;
+      const mr = Math.min(cx, cy) * 0.95;
+      const md = w * MAX_DRAG_FRAC;
+
+      if (draggingRef.current && dragIdxRef.current >= 0 && dragStartRef.current) {
+        // ── Dragging ────────────────────────────────────────────────────
+        const di = dragIdxRef.current;
+        const st = dragStartRef.current;
+        const ns = nodesRef.current;
+        const dx = x - st.mx;
+        const dy = y - st.my;
+
+        // Clamped offset for the dragged node
+        const newOx = clamp(st.bases[di * 2] + dx, -md, md);
+        const newOy = clamp(st.bases[di * 2 + 1] + dy, -md, md);
+        ns[di] = { ...ns[di], offsetX: newOx, offsetY: newOy };
+
+        // Effective delta (may differ from raw dx/dy due to clamping)
+        const edx = newOx - st.bases[di * 2];
+        const edy = newOy - st.bases[di * 2 + 1];
+
+        if (ns[di].ring === 0) {
+          // Center node → affects ALL branches with ring-distance falloff
+          for (let i = 1; i < ns.length; i++) {
+            const rd = ns[i].ring;
+            const f = Math.exp(-(rd * rd) / (2 * SIGMA * SIGMA));
+            ns[i] = {
+              ...ns[i],
+              offsetX: clamp(st.bases[i * 2] + edx * f, -md, md),
+              offsetY: clamp(st.bases[i * 2 + 1] + edy * f, -md, md),
+            };
           }
         } else {
-          setTooltip(null);
-          canvasRef.current?.style.setProperty('cursor', 'default');
+          // Branch node → affects same-branch nodes + center
+          const branch = ns[di].branch;
+          for (let i = 0; i < ns.length; i++) {
+            if (i === di) continue;
+            const n = ns[i];
+            let rd: number;
+            let affect: boolean;
+            if (n.ring === 0) {
+              rd = ns[di].ring; // center is at ring distance = dragged ring
+              affect = true;
+            } else if (n.branch === branch) {
+              rd = Math.abs(n.ring - ns[di].ring);
+              affect = true;
+            } else {
+              affect = false;
+              rd = 0;
+            }
+            if (affect) {
+              const f = Math.exp(-(rd * rd) / (2 * SIGMA * SIGMA));
+              ns[i] = {
+                ...ns[i],
+                offsetX: clamp(st.bases[i * 2] + edx * f, -md, md),
+                offsetY: clamp(st.bases[i * 2 + 1] + edy * f, -md, md),
+              };
+            }
+          }
+        }
+
+        // Update tooltip
+        const hs = hueSatAt(x, y, cx, cy, mr);
+        setTip({
+          x,
+          y,
+          hue: hs.hue,
+          saturation: hs.saturation,
+          offsetX: Math.round(newOx * 10) / 10,
+          offsetY: Math.round(newOy * 10) / 10,
+          isDragging: true,
+        });
+
+        sched();
+      } else {
+        // ── Hovering ────────────────────────────────────────────────────
+        const idx = hitTest(nodesRef.current, cx, cy, mr, x, y);
+        hoverIdxRef.current = idx;
+
+        if (idx >= 0) {
+          const n = nodesRef.current[idx];
+          const [nx, ny] = nodeXY(n, cx, cy, mr);
+          const hs = hueSatAt(nx, ny, cx, cy, mr);
+          setTip({
+            x,
+            y,
+            hue: hs.hue,
+            saturation: hs.saturation,
+            offsetX: Math.round(n.offsetX * 10) / 10,
+            offsetY: Math.round(n.offsetY * 10) / 10,
+            isDragging: false,
+          });
+          olRef.current?.style.setProperty('cursor', 'grab');
+        } else {
+          setTip(null);
+          olRef.current?.style.setProperty('cursor', 'default');
+        }
+
+        sched();
+      }
+    },
+    [mouseXY, sched],
+  );
+
+  const onUp = useCallback(() => {
+    if (draggingRef.current) {
+      draggingRef.current = false;
+      dragIdxRef.current = -1;
+      dragStartRef.current = null;
+      olRef.current?.style.setProperty('cursor', 'grab');
+    }
+  }, []);
+
+  const onLeave = useCallback(() => {
+    hoverIdxRef.current = -1;
+    setTip(null);
+    if (draggingRef.current) {
+      draggingRef.current = false;
+      dragIdxRef.current = -1;
+      dragStartRef.current = null;
+    }
+    olRef.current?.style.setProperty('cursor', 'default');
+    sched();
+  }, [sched]);
+
+  const onDbl = useCallback(
+    (e: React.MouseEvent) => {
+      const { x, y } = mouseXY(e);
+      const { w, h } = sizeRef.current;
+      const cx = w / 2;
+      const cy = h / 2;
+      const mr = Math.min(cx, cy) * 0.95;
+      const idx = hitTest(nodesRef.current, cx, cy, mr, x, y);
+      if (idx < 0) return;
+
+      const ns = nodesRef.current;
+      const n = ns[idx];
+
+      if (n.ring === 0) {
+        // Center → reset all 25 nodes
+        for (let i = 0; i < ns.length; i++) {
+          ns[i] = { ...ns[i], offsetX: 0, offsetY: 0 };
+        }
+      } else {
+        // Reset entire branch (center + all same-branch nodes)
+        for (let i = 0; i < ns.length; i++) {
+          if (ns[i].ring === 0 || ns[i].branch === n.branch) {
+            ns[i] = { ...ns[i], offsetX: 0, offsetY: 0 };
+          }
         }
       }
+
+      sched();
     },
-    [
-      isDragging,
-      dragNodeId,
-      findNodeAt,
-      updateABNode,
-      nodeMap,
-      getCanvasCoords,
-    ]
+    [mouseXY, sched],
   );
 
-  const handleMouseUp = useCallback(() => {
-    if (isDragging) {
-      setIsDragging(false);
-      setDragNodeId(null);
-      dragStartRef.current = null;
-    }
-  }, [isDragging]);
+  // ══════════════════════════════════════════════════════════════════════════
+  // Render
+  // ══════════════════════════════════════════════════════════════════════════
 
-  const handleDoubleClick = useCallback(
-    (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
-      const nodeId = findNodeAt(x, y);
-      if (nodeId) {
-        updateABNode(nodeId, 0, 0);
-      }
-    },
-    [findNodeAt, updateABNode, getCanvasCoords]
-  );
-
-  const handleMouseLeave = useCallback(() => {
-    setHoverNodeId(null);
-    setTooltip(null);
-    if (isDragging) {
-      setIsDragging(false);
-      setDragNodeId(null);
-      dragStartRef.current = null;
-    }
-  }, [isDragging]);
-
-  // ─── Render ──────────────────────────────────────────────────────────────
   return (
     <motion.div
       className={`relative overflow-hidden rounded-xl border border-white/[0.08] bg-neutral-950 shadow-2xl shadow-black/40 ${className}`}
@@ -624,69 +787,69 @@ export default function ABGrid({ className = '' }: ABGridProps) {
       animate={{ opacity: 1, scale: 1 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
     >
-      {/* Header bar */}
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between border-b border-white/[0.06] bg-white/[0.02] px-3 py-1.5">
         <div className="flex items-center gap-2">
           <div className="h-2 w-2 rounded-full bg-amber-400/80" />
           <span className="text-[11px] font-medium tracking-wider text-white/40 uppercase">
-            A/B Hue–Saturation
+            Hue / Saturation
           </span>
         </div>
         <div className="flex items-center gap-3 text-[10px] text-white/25">
-          <span>Drag to bend</span>
+          <span>Drag nodes to adjust</span>
           <span className="text-white/10">|</span>
-          <span>Double-click to reset</span>
+          <span>Dbl-click to reset branch</span>
         </div>
       </div>
 
-      {/* Canvas container */}
+      {/* ── Canvas container ─────────────────────────────────────────────── */}
       <div
         ref={containerRef}
-        className="relative aspect-[16/10] w-full"
-        style={{ minHeight: 200 }}
+        className="relative aspect-square w-full"
+        style={{ minHeight: 250 }}
       >
-        {/* Background canvas (only redrawn on resize) */}
+        {/* Background canvas — hue wheel + grid (redrawn only on resize) */}
         <canvas
-          ref={bgCanvasRef}
+          ref={bgRef}
           className="absolute inset-0 rounded-b-[11px]"
           style={{ display: 'block' }}
         />
 
-        {/* Overlay canvas (redrawn on every interaction) */}
+        {/* Overlay canvas — mesh, nodes, helpers (redrawn on interaction) */}
         <canvas
-          ref={canvasRef}
+          ref={olRef}
           className="absolute inset-0 rounded-b-[11px]"
           style={{ display: 'block' }}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseLeave}
-          onDoubleClick={handleDoubleClick}
+          onMouseDown={onDown}
+          onMouseMove={onMove}
+          onMouseUp={onUp}
+          onMouseLeave={onLeave}
+          onDoubleClick={onDbl}
         />
 
-        {/* Tooltip */}
-        {tooltip && (
+        {/* ── Tooltip ────────────────────────────────────────────────────── */}
+        {tip && (
           <div
             className="pointer-events-none absolute z-10 rounded-md border border-white/10 bg-neutral-900/90 px-2.5 py-1.5 text-[10px] text-white/70 shadow-lg backdrop-blur-sm"
             style={{
-                  left: Math.min(tooltip.x + 16, canvasSize.w - 140),
-              top: Math.max(tooltip.y - 52, 4),
+              left: Math.min(tip.x + 16, cssSize.w - 150),
+              top: Math.max(tip.y - 52, 4),
             }}
           >
             <div className="flex items-center gap-2">
               <div
                 className="h-3 w-3 rounded-sm border border-white/20"
                 style={{
-                  backgroundColor: hslString(tooltip.hue, tooltip.saturation, 50),
+                  backgroundColor: `hsl(${tip.hue}, ${tip.saturation}%, 50%)`,
                 }}
               />
               <span className="font-medium text-white/90">
-                H: {Math.round(tooltip.hue)}° S: {Math.round(tooltip.saturation)}%
+                H: {Math.round(tip.hue)}° S: {Math.round(tip.saturation)}%
               </span>
             </div>
-            {(tooltip.offsetX !== 0 || tooltip.offsetY !== 0) && (
+            {(Math.abs(tip.offsetX) > 0.1 || Math.abs(tip.offsetY) > 0.1) && (
               <div className="mt-0.5 pl-5 text-white/40">
-                Offset: {tooltip.offsetX.toFixed(1)}° / {tooltip.offsetY.toFixed(1)}%
+                Offset: {tip.offsetX.toFixed(1)} / {tip.offsetY.toFixed(1)}
               </div>
             )}
           </div>
