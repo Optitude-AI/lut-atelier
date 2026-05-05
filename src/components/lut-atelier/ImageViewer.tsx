@@ -333,9 +333,19 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const isDraggingSplit = useRef(false);
 
   const [isBefore, setIsBefore] = useState(false);
-  const [zoom, setZoom] = useState<'fit' | '100' | '200'>('fit');
+  const [zoom, setZoom] = useState<number | 'fit'>('fit');
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+
+  /* ----- Track previous image URL to reset zoom on image change ----- */
+  const prevImageRef = useRef(currentImage?.dataUrl);
+  useEffect(() => {
+    if (prevImageRef.current !== currentImage?.dataUrl) {
+      prevImageRef.current = currentImage?.dataUrl;
+      setZoom('fit');
+    }
+  }, [currentImage?.dataUrl]);
 
   /* ----- Observe container size ----- */
   useEffect(() => {
@@ -455,11 +465,71 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   /* ----- Zoom controls ----- */
 
+  // Calculate fit scale and actual zoom percentage
+  const fitScale = useMemo(() => {
+    if (!hasImage || containerSize.w === 0 || containerSize.h === 0) return 1;
+    const img = currentImage!;
+    const padding = 48;
+    const availW = containerSize.w - padding;
+    const availH = containerSize.h - 100;
+    return Math.min(availW / img.width, availH / img.height, 1);
+  }, [hasImage, currentImage, containerSize]);
+
+  const zoomPercent = useMemo(() => {
+    if (zoom === 'fit') return Math.round(fitScale * 100);
+    return zoom;
+  }, [zoom, fitScale]);
+
+  // Get actual display dimensions for the image
+  const imageDisplaySize = useMemo(() => {
+    if (!hasImage) return { w: 0, h: 0 };
+    const img = currentImage!;
+    const scale = zoom === 'fit' ? fitScale : zoom / 100;
+    return {
+      w: Math.round(img.width * scale),
+      h: Math.round(img.height * scale),
+    };
+  }, [hasImage, currentImage, zoom, fitScale]);
+
+  const isZoomed = zoom !== 'fit';
+
   const cycleZoom = useCallback(() => {
-    const levels: Array<'fit' | '100' | '200'> = ['fit', '100', '200'];
+    const levels: Array<number | 'fit'> = ['fit', 100, 200, 400];
     const idx = levels.indexOf(zoom);
     setZoom(levels[(idx + 1) % levels.length]);
   }, [zoom]);
+
+  const zoomIn = useCallback(() => {
+    const current = zoom === 'fit' ? Math.round(fitScale * 100) : zoom;
+    setZoom(Math.min(current + 25, 800));
+  }, [zoom, fitScale]);
+
+  const zoomOut = useCallback(() => {
+    const current = zoom === 'fit' ? Math.round(fitScale * 100) : zoom;
+    if (current - 25 <= Math.round(fitScale * 100)) {
+      setZoom('fit');
+    } else {
+      setZoom(Math.max(current - 25, 10));
+    }
+  }, [zoom, fitScale]);
+
+  /* ----- Scroll-wheel zoom ----- */
+  useEffect(() => {
+    const el = workspaceRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          zoomIn();
+        } else {
+          zoomOut();
+        }
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [zoomIn, zoomOut]);
 
   /* ----- Compare mode icons ----- */
 
@@ -555,12 +625,15 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       </motion.div>
 
       {/* ----- Workspace area ----- */}
-      <div className="relative flex flex-1 items-center justify-center overflow-auto p-4">
+      <div
+        ref={workspaceRef}
+        className={`relative flex flex-1 ${isZoomed ? 'overflow-auto' : 'overflow-hidden'} p-4`}
+      >
         <CheckerboardPattern />
 
         <motion.div
-          className="relative z-10"
-          style={{ maxWidth: '100%', maxHeight: '100%' }}
+          className={`relative z-10 ${isZoomed ? '' : 'flex items-center justify-center w-full h-full'}`}
+          style={isZoomed ? { display: 'inline-block' } : undefined}
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
@@ -571,11 +644,13 @@ export default function ImageViewer({ className }: ImageViewerProps) {
               <GradedImage
                 image={img}
                 filter={effectiveFilter}
-                className="rounded-lg shadow-2xl shadow-black/50 max-w-full max-h-full"
-                style={{
+                className="rounded-lg shadow-2xl shadow-black/50"
+                style={isZoomed ? {
+                  width: imageDisplaySize.w,
+                  height: imageDisplaySize.h,
+                } : {
                   maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
                   maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
-                  width: zoom === 'fit' ? 'auto' : undefined,
                 }}
               />
               <AnimatePresence>
@@ -600,12 +675,19 @@ export default function ImageViewer({ className }: ImageViewerProps) {
           {compareMode === 'split' && (
             <div
               className="relative overflow-hidden rounded-lg shadow-2xl shadow-black/50 inline-block"
+              style={isZoomed ? {
+                width: imageDisplaySize.w,
+                height: imageDisplaySize.h,
+              } : undefined}
             >
               <GradedImage
                 image={img}
                 filter="none"
                 className="block"
-                style={{
+                style={isZoomed ? {
+                  width: imageDisplaySize.w,
+                  height: imageDisplaySize.h,
+                } : {
                   maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
                   maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                 }}
@@ -623,7 +705,11 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   image={img}
                   filter={effectiveFilter}
                   className="block"
-                  style={{
+                  style={isZoomed ? {
+                    width: imageDisplaySize.w,
+                    height: imageDisplaySize.h,
+                    marginLeft: `-${splitPosition}%`,
+                  } : {
                     maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
                     maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                     marginLeft: `-${splitPosition}%`,
@@ -675,7 +761,10 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   image={img}
                   filter="none"
                   className="rounded-lg shadow-2xl shadow-black/50"
-                  style={{
+                  style={isZoomed ? {
+                    width: Math.round(imageDisplaySize.w / 2),
+                    height: imageDisplaySize.h,
+                  } : {
                     maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
                     maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                   }}
@@ -687,7 +776,10 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   image={img}
                   filter={effectiveFilter}
                   className="rounded-lg shadow-2xl shadow-black/50"
-                  style={{
+                  style={isZoomed ? {
+                    width: Math.round(imageDisplaySize.w / 2),
+                    height: imageDisplaySize.h,
+                  } : {
                     maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
                     maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                   }}
@@ -696,14 +788,14 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </div>
           )}
 
-          {/* Zoomed overflow indicators */}
-          {zoom !== 'fit' && (
+          {/* Zoomed overflow indicator */}
+          {isZoomed && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="absolute -top-8 left-1/2 -translate-x-1/2 rounded-md bg-black/60 px-2.5 py-1 text-[11px] text-white/70 backdrop-blur-sm"
+              className="absolute top-2 left-1/2 -translate-x-1/2 z-30 rounded-md bg-black/70 px-3 py-1 text-[11px] font-medium tabular-nums text-white/80 backdrop-blur-sm border border-white/10"
             >
-              {zoom}%
+              {zoomPercent}%
             </motion.div>
           )}
         </motion.div>
@@ -780,23 +872,55 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
           <div className="mx-1 h-5 w-px bg-white/[0.08]" />
 
-          {/* Zoom */}
+          {/* Zoom out */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                className="flex h-9 min-w-[3rem] items-center justify-center rounded-lg px-2 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
+                onClick={zoomOut}
+                aria-label="Zoom out"
+              >
+                <ZoomOut className="h-[18px] w-[18px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
+              Zoom out (Ctrl+Scroll)
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Zoom level indicator */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-lg px-2.5 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
                 onClick={cycleZoom}
                 aria-label="Cycle zoom level"
               >
                 {zoom === 'fit' ? (
                   <Maximize2 className="h-4 w-4" />
                 ) : (
-                  <span>{zoom}%</span>
+                  <span>{zoomPercent}%</span>
                 )}
               </button>
             </TooltipTrigger>
             <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
-              {zoom === 'fit' ? 'Fit to view' : `Zoom: ${zoom}%`}
+              {zoom === 'fit' ? 'Fit to view' : `Zoom: ${zoomPercent}% — Click to cycle`}
+            </TooltipContent>
+          </Tooltip>
+
+          {/* Zoom in */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className="flex h-9 w-9 items-center justify-center rounded-lg text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
+                onClick={zoomIn}
+                aria-label="Zoom in"
+              >
+                <ZoomIn className="h-[18px] w-[18px]" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
+              Zoom in (Ctrl+Scroll)
             </TooltipContent>
           </Tooltip>
 
