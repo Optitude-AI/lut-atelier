@@ -1,24 +1,29 @@
 'use client';
 
-import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { useAppStore, type CLGridNode } from '@/store/useAppStore';
-import { hslToRgb, hslString } from '@/lib/colorUtils';
+import { useAppStore } from '@/store/useAppStore';
+import { hslToRgb } from '@/lib/colorUtils';
 
 // ─── Props ───────────────────────────────────────────────────────────────────
 interface CLGridProps {
   className?: string;
 }
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const NODE_RADIUS = 7;
-const NODE_HIT_RADIUS = 14;
-const PADDING = 0;
-const LUM_OFFSET_SCALE = 0.5; // offsetX maps to ±50% luminance shift
-const CHROMA_OFFSET_SCALE = 0.5; // offsetY maps to ±50% chroma shift
-const CL_BG_HUE = 25; // warm-neutral hue for the background gradient
+// ─── Mesh Node ───────────────────────────────────────────────────────────────
+interface CLMeshNode {
+  id: string;
+  row: number;       // 0-6 (chroma level index)
+  col: number;       // 0-8 (luminance level index)
+  homeX: number;     // pixel home X
+  homeY: number;     // pixel home Y
+  currentX: number;  // pixel current X (= homeX + offsetX)
+  currentY: number;  // pixel current Y (= homeY + offsetY)
+  offsetX: number;   // pixel offset X from home
+  offsetY: number;   // pixel offset Y from home
+}
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Tooltip ─────────────────────────────────────────────────────────────────
 interface TooltipData {
   x: number;
   y: number;
@@ -29,142 +34,166 @@ interface TooltipData {
   isDragging: boolean;
 }
 
+// ─── Constants ───────────────────────────────────────────────────────────────
+const NODE_RADIUS = 5;
+const NODE_HIT_RADIUS = 12;
+const ROWS = 7;
+const COLS = 9;
+const CL_BG_HUE = 25; // warm-neutral hue
+
+// 7 chroma levels: 0%, 15%, 30%, 45%, 60%, 80%, 100%
+const CHROMA_LEVELS = [0, 15, 30, 45, 60, 80, 100];
+// 9 luminance levels: 0%, 12.5%, 25%, 37.5%, 50%, 62.5%, 75%, 87.5%, 100%
+const LUM_LEVELS = [0, 12.5, 25, 37.5, 50, 62.5, 75, 87.5, 100];
+
+const FALLOFF_SIGMA = 1.8;        // Gaussian falloff in column units
+const MAX_DRAG_FRACTION = 0.12;   // max drag as fraction of canvas dimension
+const DATA_PAD = 6;               // inner padding for the data area
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Convert luminance (0-100) and chroma (0-100) to canvas pixel coordinates */
-function chromaLumToCanvas(
-  luminance: number,
-  chroma: number,
-  w: number,
-  h: number
-): { x: number; y: number } {
+/** Compute pixel home position from row/col and canvas size */
+function getHomePos(row: number, col: number, w: number, h: number) {
+  const lumFrac = LUM_LEVELS[col] / 100;
+  const chromaFrac = CHROMA_LEVELS[row] / 100;
   return {
-    x: PADDING + (luminance / 100) * (w - 2 * PADDING),
-    y: PADDING + (1 - chroma / 100) * (h - 2 * PADDING), // top = 100% chroma, bottom = 0%
+    x: DATA_PAD + lumFrac * (w - 2 * DATA_PAD),
+    y: DATA_PAD + (1 - chromaFrac) * (h - 2 * DATA_PAD),
   };
 }
 
-/** Convert canvas pixel coordinates to luminance/chroma */
-function canvasToChromaLum(
-  cx: number,
-  cy: number,
-  w: number,
-  h: number
-): { luminance: number; chroma: number } {
-  const luminance = ((cx - PADDING) / (w - 2 * PADDING)) * 100;
-  const chroma = (1 - (cy - PADDING) / (h - 2 * PADDING)) * 100;
-  return {
-    luminance: Math.max(0, Math.min(100, luminance)),
-    chroma: Math.max(0, Math.min(100, chroma)),
-  };
-}
-
-/** Compute the offset in chroma/lum units from a pixel delta */
-function pixelDeltaToCLDelta(dx: number, dy: number, w: number, h: number) {
-  return {
-    dlum: (dx / (w - 2 * PADDING)) * 100,
-    dchroma: -(dy / (h - 2 * PADDING)) * 100,
-  };
-}
-
-/** Get distance between two points */
-function dist(x1: number, y1: number, x2: number, y2: number): number {
+/** Euclidean distance */
+function distPt(x1: number, y1: number, x2: number, y2: number): number {
   return Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, v));
+}
+
+/** Gaussian falloff: 1.0 at distance 0, decays to ~0 at distance ~3*sigma */
+function gaussFalloff(distance: number, sigma: number): number {
+  return Math.exp(-(distance * distance) / (2 * sigma * sigma));
+}
+
+/** Generate the full grid of mesh nodes */
+function generateNodes(w: number, h: number): CLMeshNode[] {
+  const nodes: CLMeshNode[] = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const { x, y } = getHomePos(r, c, w, h);
+      nodes.push({
+        id: `cl-${r}-${c}`,
+        row: r,
+        col: c,
+        homeX: x,
+        homeY: y,
+        currentX: x,
+        currentY: y,
+        offsetX: 0,
+        offsetY: 0,
+      });
+    }
+  }
+  return nodes;
+}
+
+/** Get a node from the flat array by row/col (row-major order) */
+function getNode(nodes: CLMeshNode[], row: number, col: number): CLMeshNode {
+  return nodes[row * COLS + col];
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
 export default function CLGrid({ className = '' }: CLGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const nodesRef = useRef<CLMeshNode[]>([]);
   const rafRef = useRef<number>(0);
   const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
-  // Interaction state
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragNodeId, setDragNodeId] = useState<string | null>(null);
-  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  // Interaction state (use refs for high-frequency values to avoid re-creating drawOverlay)
+  const isDraggingRef = useRef(false);
+  const hoverNodeIdRef = useRef<string | null>(null);
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [canvasReady, setCanvasReady] = useState(false);
-  const dragStartRef = useRef<{
-    x: number;
-    y: number;
-    nodeChroma: number;
-    nodeLum: number;
-    origOffsetX: number;
-    origOffsetY: number;
+
+  // Drag tracking
+  const dragInfoRef = useRef<{
+    nodeId: string;
+    row: number;
+    col: number;
+    startMouseX: number;
+    startMouseY: number;
+    startOffsets: Map<number, { offsetX: number; offsetY: number }>;
   } | null>(null);
 
-  // Zustand store
-  const clNodes = useAppStore((s) => s.clNodes);
-  const updateCLNode = useAppStore((s) => s.updateCLNode);
+  // Zustand store (for selectedNodeId, showNodeHelpers)
   const selectedNodeId = useAppStore((s) => s.selectedNodeId);
   const setSelectedNodeId = useAppStore((s) => s.setSelectedNodeId);
   const showNodeHelpers = useAppStore((s) => s.showNodeHelpers);
 
-  // ─── Node map for quick lookup ───────────────────────────────────────────
-  const nodeMap = useMemo(() => {
-    const map = new Map<string, CLGridNode>();
-    for (const node of clNodes) map.set(node.id, node);
-    return map;
-  }, [clNodes]);
+  // ─── Render background gradient ──────────────────────────────────────────
+  // Warm-neutral gradient: X = luminance (0→100), Y = chroma (100→0 from top to bottom)
+  const renderBackground = useCallback((w: number, h: number) => {
+    const canvas = bgCanvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.scale(dpr, dpr);
 
-  // ─── Nodes grouped by chroma for bezier curves ──────────────────────────
-  const nodesByChroma = useMemo(() => {
-    const groups = new Map<number, CLGridNode[]>();
-    for (const node of clNodes) {
-      const c = node.chroma;
-      if (!groups.has(c)) groups.set(c, []);
-      groups.get(c)!.push(node);
-    }
-    // Sort each group by luminance
-    for (const [, nodes] of groups) {
-      nodes.sort((a, b) => a.luminance - b.luminance);
-    }
-    return groups;
-  }, [clNodes]);
-
-  // ─── Render the background chroma-luminance gradient ────────────────────
-  const renderBackground = useCallback(
-    (w: number, h: number) => {
-      const bgCanvas = bgCanvasRef.current;
-      if (!bgCanvas) return;
-      bgCanvas.width = w * window.devicePixelRatio;
-      bgCanvas.height = h * window.devicePixelRatio;
-      bgCanvas.style.width = `${w}px`;
-      bgCanvas.style.height = `${h}px`;
-      const bgCtx = bgCanvas.getContext('2d');
-      if (!bgCtx) return;
-      bgCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-      // Use ImageData for fast pixel-by-pixel rendering
-      const imageData = bgCtx.createImageData(w, h);
-      const data = imageData.data;
-
-      for (let y = 0; y < h; y++) {
-        const chromaRatio = 1 - y / h; // top = 100% chroma, bottom = 0%
-        for (let x = 0; x < w; x++) {
-          const lum = (x / w) * 100;
-          const chroma = chromaRatio * 100;
-          // Use a warm-neutral hue to visualize chroma range
-          const [r, g, b] = hslToRgb(CL_BG_HUE, chroma, lum);
-          const idx = (y * w + x) * 4;
-          data[idx] = r;
-          data[idx + 1] = g;
-          data[idx + 2] = b;
-          data[idx + 3] = 255;
-        }
+    const imageData = ctx.createImageData(w, h);
+    const data = imageData.data;
+    for (let y = 0; y < h; y++) {
+      const chromaRatio = 1 - y / h; // top=100% chroma, bottom=0%
+      const chroma = chromaRatio * 100;
+      for (let x = 0; x < w; x++) {
+        const lum = (x / w) * 100;
+        const [r, g, b] = hslToRgb(CL_BG_HUE, chroma, lum);
+        const idx = (y * w + x) * 4;
+        data[idx] = r;
+        data[idx + 1] = g;
+        data[idx + 2] = b;
+        data[idx + 3] = 255;
       }
+    }
+    ctx.putImageData(imageData, 0, 0);
+  }, []);
 
-      bgCtx.putImageData(imageData, 0, 0);
+  // ─── Update node home positions on resize ────────────────────────────────
+  const updateNodesForSize = useCallback(
+    (w: number, h: number, preserveOffsets = false) => {
+      const oldW = sizeRef.current.w;
+      const oldH = sizeRef.current.h;
+
+      if (preserveOffsets && oldW > 0 && oldH > 0 && nodesRef.current.length > 0) {
+        const scaleX = w / oldW;
+        const scaleY = h / oldH;
+        for (const node of nodesRef.current) {
+          const pos = getHomePos(node.row, node.col, w, h);
+          node.offsetX *= scaleX;
+          node.offsetY *= scaleY;
+          node.homeX = pos.x;
+          node.homeY = pos.y;
+          node.currentX = pos.x + node.offsetX;
+          node.currentY = pos.y + node.offsetY;
+        }
+      } else {
+        nodesRef.current = generateNodes(w, h);
+      }
     },
     []
   );
 
-  // ─── Main draw function ──────────────────────────────────────────────────
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
+  // ─── Draw overlay (mesh fill + mesh lines + helpers + nodes + labels) ────
+  const drawOverlay = useCallback(() => {
+    const canvas = overlayCanvasRef.current;
     const bgCanvas = bgCanvasRef.current;
     if (!canvas || !bgCanvas) return;
 
@@ -181,254 +210,225 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     if (!ctx) return;
     ctx.scale(dpr, dpr);
 
-    // 1. Clear and draw background
+    const nodes = nodesRef.current;
+    if (nodes.length === 0) return;
+
+    // Read dynamic values from refs/store
+    const currentSelectedId = useAppStore.getState().selectedNodeId;
+    const helpersVisible = useAppStore.getState().showNodeHelpers;
+    const isDragging = isDraggingRef.current;
+    const dragNodeId = dragInfoRef.current?.nodeId ?? null;
+    const currentHoverId = hoverNodeIdRef.current;
+
+    // ── 1. Background ────────────────────────────────────────────────────
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(bgCanvas, 0, 0, w, h);
 
-    // 2. Subtle vignette overlay for depth
-    const vigGrad = ctx.createRadialGradient(w / 2, h / 2, w * 0.2, w / 2, h / 2, w * 0.75);
-    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    vigGrad.addColorStop(1, 'rgba(0, 0, 0, 0.15)');
+    // Subtle vignette for depth
+    const vigGrad = ctx.createRadialGradient(
+      w / 2, h / 2, w * 0.25,
+      w / 2, h / 2, w * 0.8
+    );
+    vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
+    vigGrad.addColorStop(1, 'rgba(0,0,0,0.12)');
     ctx.fillStyle = vigGrad;
     ctx.fillRect(0, 0, w, h);
 
-    // 3. Grid lines
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
-    ctx.lineWidth = 1;
+    // ── 2. Colored mesh fill (each cell filled with warm color) ───────────
+    for (let r = 0; r < ROWS - 1; r++) {
+      for (let c = 0; c < COLS - 1; c++) {
+        const tl = getNode(nodes, r, c);
+        const tr = getNode(nodes, r, c + 1);
+        const bl = getNode(nodes, r + 1, c);
+        const br = getNode(nodes, r + 1, c + 1);
 
-    // Vertical lines (luminance divisions — every 10%)
-    for (let i = 0; i <= 10; i++) {
-      const lum = i * 10;
-      const { x } = chromaLumToCanvas(lum, 0, w, h);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
+        // Centroid for color sampling
+        const cx = (tl.currentX + tr.currentX + bl.currentX + br.currentX) / 4;
+        const cy = (tl.currentY + tr.currentY + bl.currentY + br.currentY) / 4;
 
-    // Horizontal lines (chroma divisions — every 10%)
-    for (let i = 0; i <= 10; i++) {
-      const chroma = i * 10;
-      const { y } = chromaLumToCanvas(0, chroma, w, h);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
+        // Map centroid back to chroma/luminance
+        const lumSample = clamp(((cx - DATA_PAD) / (w - 2 * DATA_PAD)) * 100, 0, 100);
+        const chromaSample = clamp(
+          (1 - (cy - DATA_PAD) / (h - 2 * DATA_PAD)) * 100,
+          0,
+          100
+        );
+        const [fr, fg, fb] = hslToRgb(CL_BG_HUE, chromaSample, lumSample);
+        const fillColor = `rgba(${fr},${fg},${fb},0.35)`;
 
-    // Highlight the 25%, 50%, 75% grid lines slightly more
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-
-    // Vertical highlights at 25, 50, 75 luminance
-    for (const lum of [25, 50, 75]) {
-      const { x } = chromaLumToCanvas(lum, 0, w, h);
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, h);
-      ctx.stroke();
-    }
-
-    // Horizontal highlights at 25, 50, 75 chroma
-    for (const chroma of [25, 50, 75]) {
-      const { y } = chromaLumToCanvas(0, chroma, w, h);
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(w, y);
-      ctx.stroke();
-    }
-
-    // 4. Bezier curves connecting nodes per chroma row
-    for (const [, chromaNodes] of nodesByChroma) {
-      if (chromaNodes.length < 2) continue;
-
-      // Draw the reference curve through original node positions
-      ctx.beginPath();
-      const first = chromaNodes[0];
-      const firstPos = chromaLumToCanvas(first.luminance, first.chroma, w, h);
-      ctx.moveTo(firstPos.x, firstPos.y);
-
-      for (let i = 1; i < chromaNodes.length; i++) {
-        const prev = chromaNodes[i - 1];
-        const curr = chromaNodes[i];
-        const prevPos = chromaLumToCanvas(prev.luminance, prev.chroma, w, h);
-        const currPos = chromaLumToCanvas(curr.luminance, curr.chroma, w, h);
-        const cpx = (prevPos.x + currPos.x) / 2;
-        ctx.quadraticCurveTo(prevPos.x, prevPos.y, cpx, (prevPos.y + currPos.y) / 2);
-      }
-      const lastNode = chromaNodes[chromaNodes.length - 1];
-      const lastPos = chromaLumToCanvas(lastNode.luminance, lastNode.chroma, w, h);
-      ctx.lineTo(lastPos.x, lastPos.y);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
-
-      // Draw the offset curve (showing the tonal bend)
-      ctx.beginPath();
-      const firstOffsetLum = first.luminance + first.offsetX * LUM_OFFSET_SCALE;
-      const firstOffsetChroma = Math.max(0, Math.min(100, first.chroma + first.offsetY * CHROMA_OFFSET_SCALE));
-      const firstOff = chromaLumToCanvas(firstOffsetLum, firstOffsetChroma, w, h);
-      ctx.moveTo(firstOff.x, firstOff.y);
-
-      for (let i = 1; i < chromaNodes.length; i++) {
-        const prev = chromaNodes[i - 1];
-        const curr = chromaNodes[i];
-        const prevOffLum = prev.luminance + prev.offsetX * LUM_OFFSET_SCALE;
-        const prevOffChroma = Math.max(0, Math.min(100, prev.chroma + prev.offsetY * CHROMA_OFFSET_SCALE));
-        const currOffLum = curr.luminance + curr.offsetX * LUM_OFFSET_SCALE;
-        const currOffChroma = Math.max(0, Math.min(100, curr.chroma + curr.offsetY * CHROMA_OFFSET_SCALE));
-        const prevOff = chromaLumToCanvas(prevOffLum, prevOffChroma, w, h);
-        const currOff = chromaLumToCanvas(currOffLum, currOffChroma, w, h);
-        const cpx = (prevOff.x + currOff.x) / 2;
-        ctx.quadraticCurveTo(prevOff.x, prevOff.y, cpx, (prevOff.y + currOff.y) / 2);
-      }
-      const lastOffLum = lastNode.luminance + lastNode.offsetX * LUM_OFFSET_SCALE;
-      const lastOffChroma = Math.max(0, Math.min(100, lastNode.chroma + lastNode.offsetY * CHROMA_OFFSET_SCALE));
-      const lastOff = chromaLumToCanvas(lastOffLum, lastOffChroma, w, h);
-      ctx.lineTo(lastOff.x, lastOff.y);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-    }
-
-    // 5. Draw helper lines and nodes
-    for (const node of clNodes) {
-      const basePos = chromaLumToCanvas(node.luminance, node.chroma, w, h);
-      const offsetLum = node.luminance + node.offsetX * LUM_OFFSET_SCALE;
-      const offsetChroma = Math.max(0, Math.min(100, node.chroma + node.offsetY * CHROMA_OFFSET_SCALE));
-      const offsetPos = chromaLumToCanvas(offsetLum, offsetChroma, w, h);
-
-      const isSelected = node.id === selectedNodeId;
-      const isHovered = node.id === hoverNodeId;
-      const isBeingDragged = node.id === dragNodeId && isDragging;
-      const hasOffset = node.offsetX !== 0 || node.offsetY !== 0;
-
-      // Helper line from original to offset position
-      if (showNodeHelpers && hasOffset) {
+        // Triangle 1: top-left, bottom-left, top-right
         ctx.beginPath();
-        ctx.moveTo(basePos.x, basePos.y);
-        ctx.lineTo(offsetPos.x, offsetPos.y);
-        ctx.strokeStyle = isSelected
-          ? 'rgba(255, 255, 255, 0.7)'
-          : 'rgba(255, 255, 255, 0.3)';
-        ctx.lineWidth = isSelected ? 1.5 : 1;
-        ctx.setLineDash([3, 3]);
-        ctx.stroke();
-        ctx.setLineDash([]);
+        ctx.moveTo(tl.currentX, tl.currentY);
+        ctx.lineTo(bl.currentX, bl.currentY);
+        ctx.lineTo(tr.currentX, tr.currentY);
+        ctx.closePath();
+        ctx.fillStyle = fillColor;
+        ctx.fill();
 
-        // Origin dot (small)
+        // Triangle 2: top-right, bottom-left, bottom-right
         ctx.beginPath();
-        ctx.arc(basePos.x, basePos.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.moveTo(tr.currentX, tr.currentY);
+        ctx.lineTo(bl.currentX, bl.currentY);
+        ctx.lineTo(br.currentX, br.currentY);
+        ctx.closePath();
+        ctx.fillStyle = fillColor;
         ctx.fill();
       }
+    }
 
-      // Glow effect for selected or hovered
-      if (isSelected || isHovered || isBeingDragged) {
+    // ── 3. Mesh lines (connecting adjacent nodes) ────────────────────────
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 0.75;
+
+    // Horizontal lines (across columns for each row)
+    for (let r = 0; r < ROWS; r++) {
+      ctx.beginPath();
+      const first = getNode(nodes, r, 0);
+      ctx.moveTo(first.currentX, first.currentY);
+      for (let c = 1; c < COLS; c++) {
+        const node = getNode(nodes, r, c);
+        ctx.lineTo(node.currentX, node.currentY);
+      }
+      ctx.stroke();
+    }
+
+    // Vertical lines (across rows for each column)
+    for (let c = 0; c < COLS; c++) {
+      ctx.beginPath();
+      const first = getNode(nodes, 0, c);
+      ctx.moveTo(first.currentX, first.currentY);
+      for (let r = 1; r < ROWS; r++) {
+        const node = getNode(nodes, r, c);
+        ctx.lineTo(node.currentX, node.currentY);
+      }
+      ctx.stroke();
+    }
+
+    // ── 4. Helper lines (dashed from home to current position) ───────────
+    if (helpersVisible) {
+      ctx.setLineDash([3, 3]);
+      for (const node of nodes) {
+        if (node.offsetX === 0 && node.offsetY === 0) continue;
+        const isSel = node.id === currentSelectedId;
+
         ctx.beginPath();
-        ctx.arc(offsetPos.x, offsetPos.y, NODE_RADIUS + 6, 0, Math.PI * 2);
+        ctx.moveTo(node.homeX, node.homeY);
+        ctx.lineTo(node.currentX, node.currentY);
+        ctx.strokeStyle = isSel
+          ? 'rgba(255,255,255,0.6)'
+          : 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = isSel ? 1.2 : 0.8;
+        ctx.stroke();
+
+        // Small origin dot at home position
+        ctx.beginPath();
+        ctx.arc(node.homeX, node.homeY, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,0.35)';
+        ctx.fill();
+      }
+      ctx.setLineDash([]);
+    }
+
+    // ── 5. Draw nodes ────────────────────────────────────────────────────
+    for (const node of nodes) {
+      const isSelected = node.id === currentSelectedId;
+      const isHovered = node.id === currentHoverId;
+      const isBeingDragged = isDragging && node.id === dragNodeId;
+      const hasOffset = node.offsetX !== 0 || node.offsetY !== 0;
+      const px = node.currentX;
+      const py = node.currentY;
+      const radius = isBeingDragged ? NODE_RADIUS + 1.5 : NODE_RADIUS;
+
+      // Glow for selected / hovered / dragged
+      if (isSelected || isHovered || isBeingDragged) {
+        const glowR = radius + 7;
         const glowGrad = ctx.createRadialGradient(
-          offsetPos.x, offsetPos.y, NODE_RADIUS,
-          offsetPos.x, offsetPos.y, NODE_RADIUS + 6
+          px, py, radius,
+          px, py, glowR
         );
         if (isSelected) {
-          glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.35)');
-          glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+          // Amber glow for selected
+          glowGrad.addColorStop(0, 'rgba(255,191,64,0.5)');
+          glowGrad.addColorStop(1, 'rgba(255,191,64,0)');
+        } else if (isBeingDragged) {
+          glowGrad.addColorStop(0, 'rgba(255,255,255,0.35)');
+          glowGrad.addColorStop(1, 'rgba(255,255,255,0)');
         } else {
-          glowGrad.addColorStop(0, 'rgba(255, 255, 255, 0.2)');
-          glowGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+          glowGrad.addColorStop(0, 'rgba(255,255,255,0.2)');
+          glowGrad.addColorStop(1, 'rgba(255,255,255,0)');
         }
+        ctx.beginPath();
+        ctx.arc(px, py, glowR, 0, Math.PI * 2);
         ctx.fillStyle = glowGrad;
         ctx.fill();
       }
 
-      // Node circle
+      // Node circle — white fill, dark border
       ctx.beginPath();
-      ctx.arc(offsetPos.x, offsetPos.y, isBeingDragged ? NODE_RADIUS + 2 : NODE_RADIUS, 0, Math.PI * 2);
-
-      // Fill with the neutral color at the offset position
-      const [nr, ng, nb] = hslToRgb(CL_BG_HUE, node.chroma, node.luminance);
-      ctx.fillStyle = `rgb(${nr}, ${ng}, ${nb})`;
+      ctx.arc(px, py, radius, 0, Math.PI * 2);
+      ctx.fillStyle = isSelected
+        ? 'rgba(255,248,230,0.95)'
+        : 'rgba(255,255,255,0.9)';
       ctx.fill();
-
-      // White border
-      ctx.strokeStyle = isSelected
-        ? 'rgba(255, 255, 255, 1)'
-        : isHovered
-          ? 'rgba(255, 255, 255, 0.85)'
-          : 'rgba(255, 255, 255, 0.55)';
-      ctx.lineWidth = isSelected ? 2.5 : 2;
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 1.5;
       ctx.stroke();
 
-      // Dark border for contrast (outside white border)
-      ctx.beginPath();
-      ctx.arc(offsetPos.x, offsetPos.y, isBeingDragged ? NODE_RADIUS + 3.5 : NODE_RADIUS + 1.5, 0, Math.PI * 2);
-      ctx.strokeStyle = isSelected
-        ? 'rgba(0, 0, 0, 0.5)'
-        : isHovered
-          ? 'rgba(0, 0, 0, 0.35)'
-          : 'rgba(0, 0, 0, 0.25)';
-      ctx.lineWidth = isSelected ? 1.5 : 1;
-      ctx.stroke();
-
-      // Inner dot (offset indicator)
+      // Inner dot to indicate offset
       if (hasOffset) {
         ctx.beginPath();
-        ctx.arc(offsetPos.x, offsetPos.y, 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+        ctx.arc(px, py, 2, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
         ctx.fill();
       }
     }
 
-    // 6. Axis labels
+    // ── 6. Axis labels ──────────────────────────────────────────────────
     ctx.save();
     ctx.font = '9px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
 
-    // Luminance labels along the bottom
+    // Luminance labels along bottom
     const lumLabels = [0, 25, 50, 75, 100];
     for (const lum of lumLabels) {
-      const { x } = chromaLumToCanvas(lum, 0, w, h);
+      const x = DATA_PAD + (lum / 100) * (w - 2 * DATA_PAD);
       ctx.textAlign = 'center';
-      ctx.fillText(`${lum}%`, x, h - 4);
+      ctx.fillText(`${lum}%`, x, h - 3);
     }
 
-    // Chroma labels along the left side
+    // Chroma labels along left
     const chromaLabels = [100, 75, 50, 25, 0];
     for (const chroma of chromaLabels) {
-      const { y } = chromaLumToCanvas(0, chroma, w, h);
+      const y = DATA_PAD + (1 - chroma / 100) * (h - 2 * DATA_PAD);
       ctx.textAlign = 'left';
-      ctx.fillText(`${chroma}%`, 3, y - 3);
+      ctx.fillText(`${chroma}%`, 3, y - 4);
     }
     ctx.restore();
 
-    // 7. Axis titles (small, subtle)
+    // ── 7. Axis titles ──────────────────────────────────────────────────
     ctx.save();
     ctx.font = '8px system-ui, -apple-system, sans-serif';
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.fillStyle = 'rgba(255,255,255,0.2)';
 
-    // X-axis title (Luminance)
+    // X-axis title
     ctx.textAlign = 'center';
-    ctx.fillText('LUMINANCE', w / 2, h - 14);
+    ctx.fillText('LUMINANCE', w / 2, h - 13);
 
-    // Y-axis title (Chroma) — rotated
+    // Y-axis title (rotated)
     ctx.save();
     ctx.translate(14, h / 2);
     ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
     ctx.fillText('CHROMA', 0, 0);
     ctx.restore();
 
     ctx.restore();
-  }, [
-    clNodes,
-    selectedNodeId,
-    hoverNodeId,
-    dragNodeId,
-    isDragging,
-    showNodeHelpers,
-    nodesByChroma,
-  ]);
+  }, []);
+
+  // ─── Schedule a draw on next animation frame ──────────────────────────────
+  const scheduleDraw = useCallback(() => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(drawOverlay);
+  }, [drawOverlay]);
 
   // ─── Resize handling ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -444,189 +444,240 @@ export default function CLGrid({ className = '' }: CLGridProps) {
           sizeRef.current = { w, h };
           setCanvasSize({ w, h });
           renderBackground(w, h);
+          updateNodesForSize(w, h, nodesRef.current.length > 0);
           setCanvasReady(true);
-          if (rafRef.current) cancelAnimationFrame(rafRef.current);
-          rafRef.current = requestAnimationFrame(draw);
+          scheduleDraw();
         }
       }
     });
 
     observer.observe(container);
     return () => observer.disconnect();
-  }, [renderBackground, draw]);
+  }, [renderBackground, updateNodesForSize, scheduleDraw]);
 
-  // ─── Redraw when dependencies change ─────────────────────────────────────
+  // ─── Redraw on store changes (selectedNodeId, showNodeHelpers) ──────────
   useEffect(() => {
     if (!canvasReady) return;
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = requestAnimationFrame(draw);
-  }, [draw, canvasReady]);
+    scheduleDraw();
+  }, [canvasReady, scheduleDraw, selectedNodeId, showNodeHelpers]);
 
   // ─── Find node under cursor ──────────────────────────────────────────────
   const findNodeAt = useCallback(
-    (cx: number, cy: number): string | null => {
-      const { w, h } = sizeRef.current;
-      let closestId: string | null = null;
-      let closestDist = Infinity;
+    (cx: number, cy: number): CLMeshNode | null => {
+      const nodes = nodesRef.current;
+      let closest: CLMeshNode | null = null;
+      let closestDist = NODE_HIT_RADIUS;
 
-      for (const node of clNodes) {
-        const offsetLum = node.luminance + node.offsetX * LUM_OFFSET_SCALE;
-        const offsetChroma = Math.max(0, Math.min(100, node.chroma + node.offsetY * CHROMA_OFFSET_SCALE));
-        const pos = chromaLumToCanvas(offsetLum, offsetChroma, w, h);
-        const d = dist(cx, cy, pos.x, pos.y);
-        if (d < NODE_HIT_RADIUS && d < closestDist) {
+      for (const node of nodes) {
+        const d = distPt(cx, cy, node.currentX, node.currentY);
+        if (d < closestDist) {
           closestDist = d;
-          closestId = node.id;
+          closest = node;
         }
       }
-      return closestId;
+      return closest;
     },
-    [clNodes]
+    []
   );
 
-  // ─── Mouse event handlers ────────────────────────────────────────────────
-  const getCanvasCoords = useCallback((e: React.MouseEvent | MouseEvent) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 0, y: 0 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    };
-  }, []);
+  // ─── Canvas coords from mouse event ─────────────────────────────────────
+  const getCoords = useCallback(
+    (e: React.MouseEvent | MouseEvent) => {
+      const canvas = overlayCanvasRef.current;
+      if (!canvas) return { x: 0, y: 0 };
+      const rect = canvas.getBoundingClientRect();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    },
+    []
+  );
 
+  // ─── Apply drag delta to a row with falloff ─────────────────────────────
+  const applyDragDelta = useCallback(
+    (
+      row: number,
+      dragCol: number,
+      deltaX: number,
+      deltaY: number,
+      startOffsets: Map<number, { offsetX: number; offsetY: number }>
+    ) => {
+      const { w, h } = sizeRef.current;
+      const maxX = w * MAX_DRAG_FRACTION;
+      const maxY = h * MAX_DRAG_FRACTION;
+      const nodes = nodesRef.current;
+
+      for (let c = 0; c < COLS; c++) {
+        const node = getNode(nodes, row, c);
+        const start = startOffsets.get(c);
+        if (!start) continue;
+
+        const distance = Math.abs(c - dragCol);
+        const influence = gaussFalloff(distance, FALLOFF_SIGMA);
+
+        node.offsetX = clamp(start.offsetX + deltaX * influence, -maxX, maxX);
+        node.offsetY = clamp(start.offsetY + deltaY * influence, -maxY, maxY);
+        node.currentX = node.homeX + node.offsetX;
+        node.currentY = node.homeY + node.offsetY;
+      }
+    },
+    []
+  );
+
+  // ─── Mouse: Down ────────────────────────────────────────────────────────
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
-      const nodeId = findNodeAt(x, y);
+      const { x, y } = getCoords(e);
+      const node = findNodeAt(x, y);
 
-      if (nodeId) {
-        const node = nodeMap.get(nodeId);
-        if (node) {
-          setSelectedNodeId(nodeId);
-          setIsDragging(true);
-          setDragNodeId(nodeId);
-          dragStartRef.current = {
-            x,
-            y,
-            nodeChroma: node.chroma,
-            nodeLum: node.luminance,
-            origOffsetX: node.offsetX,
-            origOffsetY: node.offsetY,
-          };
-          setTooltip({
-            x,
-            y,
-            chroma: node.chroma,
-            luminance: node.luminance,
-            offsetX: node.offsetX,
-            offsetY: node.offsetY,
-            isDragging: true,
-          });
+      if (node) {
+        setSelectedNodeId(node.id);
+        isDraggingRef.current = true;
+
+        // Snapshot all offsets on this row
+        const startOffsets = new Map<
+          number,
+          { offsetX: number; offsetY: number }
+        >();
+        const nodes = nodesRef.current;
+        for (let c = 0; c < COLS; c++) {
+          const rn = getNode(nodes, node.row, c);
+          startOffsets.set(c, { offsetX: rn.offsetX, offsetY: rn.offsetY });
         }
+
+        dragInfoRef.current = {
+          nodeId: node.id,
+          row: node.row,
+          col: node.col,
+          startMouseX: x,
+          startMouseY: y,
+          startOffsets,
+        };
+
+        setTooltip({
+          x,
+          y,
+          chroma: CHROMA_LEVELS[node.row],
+          luminance: LUM_LEVELS[node.col],
+          offsetX: node.offsetX,
+          offsetY: node.offsetY,
+          isDragging: true,
+        });
+
+        overlayCanvasRef.current?.style.setProperty('cursor', 'grabbing');
       } else {
         setSelectedNodeId(null);
         setTooltip(null);
       }
     },
-    [findNodeAt, nodeMap, setSelectedNodeId, getCanvasCoords]
+    [findNodeAt, getCoords, setSelectedNodeId]
   );
 
+  // ─── Mouse: Move ────────────────────────────────────────────────────────
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
+      const { x, y } = getCoords(e);
 
-      if (isDragging && dragNodeId && dragStartRef.current) {
-        const start = dragStartRef.current;
-        const { w, h } = sizeRef.current;
-        const dx = x - start.x;
-        const dy = y - start.y;
-        const { dlum, dchroma } = pixelDeltaToCLDelta(dx, dy, w, h);
+      if (isDraggingRef.current && dragInfoRef.current) {
+        const info = dragInfoRef.current;
+        const deltaX = x - info.startMouseX;
+        const deltaY = y - info.startMouseY;
 
-        // Scale pixel deltas to offset range (-100..100)
-        const newOffsetX = start.origOffsetX + (dlum / 100) * 100;
-        const newOffsetY = start.origOffsetY + (dchroma / 100) * 100;
+        applyDragDelta(info.row, info.col, deltaX, deltaY, info.startOffsets);
+        scheduleDraw();
 
-        const clampedX = Math.max(-100, Math.min(100, newOffsetX));
-        const clampedY = Math.max(-100, Math.min(100, newOffsetY));
+        const node = getNode(nodesRef.current, info.row, info.col);
+        setTooltip({
+          x,
+          y,
+          chroma: CHROMA_LEVELS[info.row],
+          luminance: LUM_LEVELS[info.col],
+          offsetX: Math.round(node.offsetX * 10) / 10,
+          offsetY: Math.round(node.offsetY * 10) / 10,
+          isDragging: true,
+        });
+      } else {
+        const node = findNodeAt(x, y);
+        const newHoverId = node?.id ?? null;
 
-        updateCLNode(dragNodeId, clampedX, clampedY);
+        // Update hover ref and schedule redraw for glow
+        if (newHoverId !== hoverNodeIdRef.current) {
+          hoverNodeIdRef.current = newHoverId;
+          scheduleDraw();
+        }
 
-        const node = nodeMap.get(dragNodeId);
         if (node) {
           setTooltip({
             x,
             y,
-            chroma: node.chroma,
-            luminance: node.luminance,
-            offsetX: Math.round(clampedX * 10) / 10,
-            offsetY: Math.round(clampedY * 10) / 10,
-            isDragging: true,
+            chroma: CHROMA_LEVELS[node.row],
+            luminance: LUM_LEVELS[node.col],
+            offsetX: Math.round(node.offsetX * 10) / 10,
+            offsetY: Math.round(node.offsetY * 10) / 10,
+            isDragging: false,
           });
-        }
-      } else {
-        // Hover detection
-        const nodeId = findNodeAt(x, y);
-        setHoverNodeId(nodeId);
-
-        if (nodeId) {
-          const node = nodeMap.get(nodeId);
-          if (node) {
-            setTooltip({
-              x,
-              y,
-              chroma: node.chroma,
-              luminance: node.luminance,
-              offsetX: node.offsetX,
-              offsetY: node.offsetY,
-              isDragging: false,
-            });
-            canvasRef.current?.style.setProperty('cursor', 'grab');
-          }
+          overlayCanvasRef.current?.style.setProperty('cursor', 'grab');
         } else {
           setTooltip(null);
-          canvasRef.current?.style.setProperty('cursor', 'default');
+          overlayCanvasRef.current?.style.setProperty('cursor', 'default');
         }
       }
     },
-    [
-      isDragging,
-      dragNodeId,
-      findNodeAt,
-      updateCLNode,
-      nodeMap,
-      getCanvasCoords,
-    ]
+    [findNodeAt, getCoords, applyDragDelta, scheduleDraw]
   );
 
+  // ─── Mouse: Up ──────────────────────────────────────────────────────────
   const handleMouseUp = useCallback(() => {
-    if (isDragging) {
-      setIsDragging(false);
-      setDragNodeId(null);
-      dragStartRef.current = null;
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      dragInfoRef.current = null;
+      overlayCanvasRef.current?.style.setProperty('cursor', 'grab');
+      scheduleDraw();
     }
-  }, [isDragging]);
+  }, [scheduleDraw]);
 
+  // ─── Mouse: Double-click (reset entire row) ─────────────────────────────
   const handleDoubleClick = useCallback(
     (e: React.MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
-      const nodeId = findNodeAt(x, y);
-      if (nodeId) {
-        updateCLNode(nodeId, 0, 0);
+      const { x, y } = getCoords(e);
+      const node = findNodeAt(x, y);
+      if (node) {
+        const nodes = nodesRef.current;
+        for (let c = 0; c < COLS; c++) {
+          const rn = getNode(nodes, node.row, c);
+          rn.offsetX = 0;
+          rn.offsetY = 0;
+          rn.currentX = rn.homeX;
+          rn.currentY = rn.homeY;
+        }
+        scheduleDraw();
+
+        // Update tooltip
+        setTooltip({
+          x,
+          y,
+          chroma: CHROMA_LEVELS[node.row],
+          luminance: LUM_LEVELS[node.col],
+          offsetX: 0,
+          offsetY: 0,
+          isDragging: false,
+        });
       }
     },
-    [findNodeAt, updateCLNode, getCanvasCoords]
+    [findNodeAt, getCoords, scheduleDraw]
   );
 
+  // ─── Mouse: Leave ───────────────────────────────────────────────────────
   const handleMouseLeave = useCallback(() => {
-    setHoverNodeId(null);
-    setTooltip(null);
-    if (isDragging) {
-      setIsDragging(false);
-      setDragNodeId(null);
-      dragStartRef.current = null;
+    if (hoverNodeIdRef.current !== null) {
+      hoverNodeIdRef.current = null;
+      scheduleDraw();
     }
-  }, [isDragging]);
+    setTooltip(null);
+    if (isDraggingRef.current) {
+      isDraggingRef.current = false;
+      dragInfoRef.current = null;
+    }
+    overlayCanvasRef.current?.style.setProperty('cursor', 'default');
+  }, [scheduleDraw]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   return (
@@ -645,9 +696,9 @@ export default function CLGrid({ className = '' }: CLGridProps) {
           </span>
         </div>
         <div className="flex items-center gap-3 text-[10px] text-white/25">
-          <span>Drag to bend</span>
+          <span>Drag to deform mesh</span>
           <span className="text-white/10">|</span>
-          <span>Double-click to reset</span>
+          <span>Dbl-click row to reset</span>
         </div>
       </div>
 
@@ -657,17 +708,17 @@ export default function CLGrid({ className = '' }: CLGridProps) {
         className="relative aspect-[16/10] w-full"
         style={{ minHeight: 200 }}
       >
-        {/* Background canvas (only redrawn on resize) */}
+        {/* Background canvas — gradient, only redrawn on resize */}
         <canvas
           ref={bgCanvasRef}
-          className="absolute inset-0 rounded-b-[11px]"
+          className="absolute inset-0"
           style={{ display: 'block' }}
         />
 
-        {/* Overlay canvas (redrawn on every interaction) */}
+        {/* Overlay canvas — mesh fill, lines, helpers, nodes, labels */}
         <canvas
-          ref={canvasRef}
-          className="absolute inset-0 rounded-b-[11px]"
+          ref={overlayCanvasRef}
+          className="absolute inset-0"
           style={{ display: 'block' }}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -676,12 +727,12 @@ export default function CLGrid({ className = '' }: CLGridProps) {
           onDoubleClick={handleDoubleClick}
         />
 
-        {/* Tooltip */}
+        {/* Tooltip overlay */}
         {tooltip && (
           <div
             className="pointer-events-none absolute z-10 rounded-md border border-white/10 bg-neutral-900/90 px-2.5 py-1.5 text-[10px] text-white/70 shadow-lg backdrop-blur-sm"
             style={{
-              left: Math.min(tooltip.x + 16, canvasSize.w - 160),
+              left: Math.min(tooltip.x + 16, canvasSize.w - 175),
               top: Math.max(tooltip.y - 52, 4),
             }}
           >
@@ -689,16 +740,18 @@ export default function CLGrid({ className = '' }: CLGridProps) {
               <div
                 className="h-3 w-3 rounded-sm border border-white/20"
                 style={{
-                  backgroundColor: hslString(CL_BG_HUE, tooltip.chroma, tooltip.luminance),
+                  backgroundColor: `hsl(${CL_BG_HUE}, ${tooltip.chroma}%, ${tooltip.luminance}%)`,
                 }}
               />
               <span className="font-medium text-white/90">
-                L: {Math.round(tooltip.luminance)}% C: {Math.round(tooltip.chroma)}%
+                L: {Math.round(tooltip.luminance)}%&nbsp; C:{' '}
+                {Math.round(tooltip.chroma)}%
               </span>
             </div>
-            {(tooltip.offsetX !== 0 || tooltip.offsetY !== 0) && (
+            {(Math.abs(tooltip.offsetX) > 0.05 ||
+              Math.abs(tooltip.offsetY) > 0.05) && (
               <div className="mt-0.5 pl-5 text-white/40">
-                Offset: {tooltip.offsetX.toFixed(1)}L / {tooltip.offsetY.toFixed(1)}C
+                Offset: {tooltip.offsetX.toFixed(1)} / {tooltip.offsetY.toFixed(1)}
               </div>
             )}
           </div>

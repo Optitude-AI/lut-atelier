@@ -14,6 +14,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { useAppStore } from '@/store/useAppStore';
 
 import TopBar from './TopBar';
@@ -26,6 +27,30 @@ import ReferenceMatch from './panels/ReferenceMatch';
 import AdjustmentStack from './panels/AdjustmentStack';
 import ExportDialog from './panels/ExportDialog';
 import IntegrationsPanel from './panels/IntegrationsPanel';
+import CurvesPanel from './panels/CurvesPanel';
+import LookManager from './panels/LookManager';
+import ChannelsPanel from './panels/ChannelsPanel';
+import MasksPanel from './panels/MasksPanel';
+import LUTImportPanel from './panels/LUTImportPanel';
+import ColorTargetsPanel from './panels/ColorTargetsPanel';
+import BatchPanel from './panels/BatchPanel';
+import ColorSpacePanel from './panels/ColorSpacePanel';
+
+const PANEL_TITLES: Record<string, string> = {
+  'lut-browser': 'LUT Browser',
+  'reference': 'AI Reference Match',
+  'adjustments': 'Adjustments',
+  'export': 'Export',
+  'integrations': 'Integrations',
+  'curves': 'Curves Editor',
+  'channels': 'Channels',
+  'masks': 'Masks',
+  'look-manager': 'Look Manager',
+  'batch': 'Batch Process',
+  'color-targets': 'Color Targets',
+  'lut-import': 'LUT Import',
+  'color-space': 'Color Space',
+};
 
 export default function Workspace() {
   const {
@@ -38,6 +63,9 @@ export default function Workspace() {
     setShowNodeHelpers,
     globalIntensity,
     setGlobalIntensity,
+    settings,
+    volume,
+    setVolume,
   } = useAppStore();
 
   return (
@@ -60,7 +88,7 @@ export default function Workspace() {
               {showScopes && (
                 <motion.div
                   initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 180, opacity: 1 }}
+                  animate={{ height: 200, opacity: 1 }}
                   exit={{ height: 0, opacity: 0 }}
                   transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                   className="border-t border-zinc-800/80 overflow-hidden"
@@ -123,12 +151,38 @@ export default function Workspace() {
                 <span className="text-[11px] text-zinc-400 font-mono w-8 text-right">{globalIntensity}%</span>
               </div>
 
+              <div className="w-px h-5 bg-zinc-800" />
+
+              {/* Volume Slider */}
+              <div className="flex items-center gap-2 flex-1 max-w-[200px]">
+                <span className="text-[10px] text-zinc-500 font-medium uppercase tracking-wider whitespace-nowrap">Volume</span>
+                <Slider
+                  value={[volume]}
+                  onValueChange={(v) => setVolume(v[0])}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  className="flex-1"
+                />
+                <span className="text-[11px] text-zinc-400 font-mono w-8 text-right">{volume > 0 ? '+' : ''}{volume}</span>
+              </div>
+
               {/* Spacer */}
               <div className="flex-1" />
 
-              {/* Quick color space badge */}
-              <div className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider">
-                sRGB · 16-bit
+              {/* Quick settings badges */}
+              <div className="hidden sm:flex items-center gap-2">
+                <div className="text-[10px] text-zinc-600 font-medium uppercase tracking-wider">
+                  {settings.colorSpace.toUpperCase().replace('-', ' ')}
+                </div>
+                <div className="w-px h-3 bg-zinc-800" />
+                <div className="text-[10px] text-zinc-600 font-medium">
+                  {settings.bitDepth}-bit
+                </div>
+                <div className="w-px h-3 bg-zinc-800" />
+                <div className="text-[10px] text-zinc-600 font-medium">
+                  {settings.inputColorSpace.toUpperCase()}
+                </div>
               </div>
             </div>
           </div>
@@ -139,19 +193,16 @@ export default function Workspace() {
               <motion.div
                 key={rightPanel}
                 initial={{ width: 0, opacity: 0 }}
-                animate={{ width: 320, opacity: 1 }}
+                animate={{ width: 360, opacity: 1 }}
                 exit={{ width: 0, opacity: 0 }}
                 transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 className="border-l border-zinc-800/80 overflow-hidden flex-shrink-0"
               >
-                <div className="w-80 h-full flex flex-col bg-zinc-950/50">
+                <div className="w-[360px] h-full flex flex-col bg-zinc-950/50">
                   {/* Panel Header */}
                   <div className="flex items-center justify-between h-10 px-3 border-b border-zinc-800/80 flex-shrink-0">
                     <span className="text-xs font-semibold text-zinc-300 uppercase tracking-wider">
-                      {rightPanel === 'lut-browser' && 'LUT Browser'}
-                      {rightPanel === 'reference' && 'AI Reference Match'}
-                      {rightPanel === 'adjustments' && 'Adjustments'}
-                      {rightPanel === 'integrations' && 'Integrations'}
+                      {PANEL_TITLES[rightPanel] || rightPanel}
                     </span>
                     <Button
                       variant="ghost"
@@ -169,6 +220,14 @@ export default function Workspace() {
                     {rightPanel === 'reference' && <ReferenceMatch />}
                     {rightPanel === 'adjustments' && <AdjustmentStack />}
                     {rightPanel === 'integrations' && <IntegrationsPanel />}
+                    {rightPanel === 'curves' && <ScrollArea className="h-full"><CurvesPanel /></ScrollArea>}
+                    {rightPanel === 'channels' && <ScrollArea className="h-full"><ChannelsPanel /></ScrollArea>}
+                    {rightPanel === 'masks' && <ScrollArea className="h-full"><MasksPanel /></ScrollArea>}
+                    {rightPanel === 'look-manager' && <ScrollArea className="h-full"><LookManager /></ScrollArea>}
+                    {rightPanel === 'batch' && <ScrollArea className="h-full"><BatchPanel /></ScrollArea>}
+                    {rightPanel === 'color-targets' && <ScrollArea className="h-full"><ColorTargetsPanel /></ScrollArea>}
+                    {rightPanel === 'lut-import' && <ScrollArea className="h-full"><LUTImportPanel /></ScrollArea>}
+                    {rightPanel === 'color-space' && <ScrollArea className="h-full"><ColorSpacePanel /></ScrollArea>}
                   </div>
                 </div>
               </motion.div>
@@ -178,11 +237,11 @@ export default function Workspace() {
           {/* Grid Editor Panel (always visible on desktop) */}
           <motion.div
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 360, opacity: 1 }}
+            animate={{ width: 380, opacity: 1 }}
             transition={{ duration: 0.4, delay: 0.1, ease: [0.16, 1, 0.3, 1] }}
-            className="border-l border-zinc-800/80 overflow-hidden flex-shrink-0 hidden lg:flex"
+            className="border-l border-zinc-800/80 overflow-hidden flex-shrink-0 hidden xl:flex"
           >
-            <div className="w-[360px] h-full flex flex-col bg-zinc-950/50">
+            <div className="w-[380px] h-full flex flex-col bg-zinc-950/50">
               {/* Grid Header */}
               <div className="flex items-center justify-between h-10 px-3 border-b border-zinc-800/80 flex-shrink-0">
                 <div className="flex items-center gap-2">

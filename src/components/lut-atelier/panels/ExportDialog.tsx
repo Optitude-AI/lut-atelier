@@ -221,33 +221,63 @@ export default function ExportDialog() {
   const handleExport = useCallback(async () => {
     setIsExporting(true);
 
-    // Sync settings back to store
-    updateSettings({
-      colorSpace: localColorSpace,
-      gridSize: Number(localGridSize) as 17 | 33 | 65,
-      bitDepth: localBitDepth as '8' | '16' | '32',
-    });
+    try {
+      // Sync settings back to store
+      updateSettings({
+        colorSpace: localColorSpace,
+        gridSize: Number(localGridSize) as 17 | 33 | 65 | 129,
+        bitDepth: localBitDepth as '8' | '16' | '32',
+      });
 
-    // Simulate export delay
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+      const response = await fetch('/api/export-cube', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: lutName,
+          gridSize: Number(localGridSize),
+          curveData: useAppStore.getState().curveData,
+          channelData: useAppStore.getState().channelData,
+          abNodes: useAppStore.getState().abNodes,
+          clNodes: useAppStore.getState().clNodes,
+          globalIntensity: useAppStore.getState().globalIntensity,
+          colorSpace: localColorSpace,
+        }),
+      });
 
-    setIsExporting(false);
-    setExportComplete(true);
+      if (!response.ok) throw new Error('Export failed');
 
-    const formatLabel = activeFormat?.formatBadge || '.cube';
-    toast.success('LUT exported successfully!', {
-      description: `${lutName}${formatLabel} has been saved.`,
-      duration: 4000,
-    });
+      // Get the .cube file content
+      const cubeContent = await response.text();
 
-    // Reset after showing success briefly
-    setTimeout(() => {
-      setExportComplete(false);
-      setIsExportOpen(false);
-      // Reset to step 0 for next time
-      setCurrentStep(0);
-      setLutName(generateLUTName());
-    }, 1500);
+      // Download the file
+      const blob = new Blob([cubeContent], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${lutName}.cube`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      setExportComplete(true);
+      toast.success('LUT exported successfully!', {
+        description: `${lutName}.cube has been downloaded.`,
+        duration: 4000,
+      });
+    } catch (error) {
+      toast.error('Export failed', {
+        description: 'There was an error generating the LUT file.',
+      });
+    } finally {
+      setIsExporting(false);
+      setTimeout(() => {
+        setExportComplete(false);
+        setIsExportOpen(false);
+        setCurrentStep(0);
+        setLutName(generateLUTName());
+      }, 1500);
+    }
   }, [
     activeFormat,
     lutName,
@@ -469,7 +499,7 @@ export default function ExportDialog() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label className="text-zinc-300 text-xs">
-                        Grid Size
+                        Max 3DLUT Size
                       </Label>
                       <Select value={localGridSize} onValueChange={setLocalGridSize}>
                         <SelectTrigger className="w-full h-9 bg-white/[0.04] border-white/10 text-white text-sm data-[placeholder]:text-zinc-600 focus:border-amber-500/50 focus:ring-amber-500/20">
@@ -477,13 +507,16 @@ export default function ExportDialog() {
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-900 border-white/10">
                           <SelectItem value="17" className="text-zinc-200 focus:bg-white/[0.06] focus:text-white">
-                            17 × 17 — Small, fast
+                            17³ — Small, fast
                           </SelectItem>
                           <SelectItem value="33" className="text-zinc-200 focus:bg-white/[0.06] focus:text-white">
-                            33 × 33 — Balanced
+                            33³ — Balanced
                           </SelectItem>
                           <SelectItem value="65" className="text-zinc-200 focus:bg-white/[0.06] focus:text-white">
-                            65 × 65 — High precision
+                            65³ — High precision
+                          </SelectItem>
+                          <SelectItem value="129" className="text-zinc-200 focus:bg-white/[0.06] focus:text-white">
+                            129³ — Maximum quality
                           </SelectItem>
                         </SelectContent>
                       </Select>
@@ -528,8 +561,8 @@ export default function ExportDialog() {
                       <span className="text-zinc-300">
                         {localColorSpace === 'srgb' ? 'sRGB' : localColorSpace === 'adobe-rgb' ? 'Adobe RGB' : 'ProPhoto RGB'}
                       </span>
-                      <span className="text-zinc-500">Grid</span>
-                      <span className="text-zinc-300">{localGridSize}×{localGridSize}</span>
+                      <span className="text-zinc-500">Max 3DLUT Size</span>
+                      <span className="text-zinc-300">{localGridSize}³</span>
                       <span className="text-zinc-500">Depth</span>
                       <span className="text-zinc-300">{localBitDepth}-bit</span>
                     </div>

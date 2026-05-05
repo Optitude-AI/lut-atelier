@@ -15,9 +15,15 @@ import {
   Layers,
   Sparkles,
   BookOpen,
-  Monitor,
-  Moon,
-  Sun,
+  Spline,
+  SlidersHorizontal,
+  Mask,
+  Bookmark,
+  FolderOpen,
+  Target,
+  FileUp,
+  SaveImage,
+  Palette,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,6 +32,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubTrigger,
+  DropdownMenuSubContent,
+  DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import {
   Tooltip,
@@ -34,7 +44,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
-import { useAppStore, type ImageInfo } from '@/store/useAppStore';
+import { useAppStore, type ImageInfo, type AppStore } from '@/store/useAppStore';
 import { useTheme } from 'next-themes';
 import { useCallback } from 'react';
 import { useToast } from '@/hooks/use-toast';
@@ -65,11 +75,7 @@ function readImageFile(file: File): Promise<ImageInfo> {
   });
 }
 
-interface TopBarProps {
-  className?: string;
-}
-
-export default function TopBar({ className }: TopBarProps) {
+export default function TopBar() {
   const {
     viewMode,
     setViewMode,
@@ -81,13 +87,11 @@ export default function TopBar({ className }: TopBarProps) {
     setRightPanel,
     isExportOpen,
     setIsExportOpen,
-    adjustmentStack,
     globalIntensity,
-    settings,
     activeLutId,
     lutItems,
+    currentImage,
   } = useAppStore();
-  const { theme, setTheme } = useTheme();
   const { toast } = useToast();
   const setCurrentImage = useAppStore((s) => s.setCurrentImage);
 
@@ -116,7 +120,38 @@ export default function TopBar({ className }: TopBarProps) {
     input.click();
   }, [setCurrentImage, toast]);
 
+  const handleSaveImage = useCallback(() => {
+    if (!currentImage) {
+      toast({ title: 'No image loaded', variant: 'destructive' });
+      return;
+    }
+    // Create a temporary link to download the current image
+    const link = document.createElement('a');
+    link.href = currentImage.dataUrl;
+    link.download = currentImage.name.replace(/\.[^.]+$/, '_processed.png');
+    link.click();
+    toast({ title: 'Image saved', description: 'Downloaded to your default folder.' });
+  }, [currentImage, toast]);
+
+  const togglePanel = useCallback((panel: AppStore['rightPanel']) => {
+    setRightPanel(rightPanel === panel ? null : panel);
+  }, [rightPanel, setRightPanel]);
+
   const activeLut = lutItems.find(l => l.id === activeLutId);
+
+  const panelButtons: { id: AppStore['rightPanel']; icon: React.ElementType; label: string; shortcut?: string }[] = [
+    { id: 'curves', icon: Spline, label: 'Curves Editor', shortcut: '⌘⇧C' },
+    { id: 'channels', icon: SlidersHorizontal, label: 'Channels', shortcut: '⌘⇧H' },
+    { id: 'masks', icon: Mask, label: 'Masks', shortcut: '⌘⇧M' },
+    { id: 'lut-browser', icon: Layers, label: 'LUT Browser', shortcut: '⌘L' },
+    { id: 'reference', icon: Sparkles, label: 'AI Reference Match', shortcut: '⌘R' },
+    { id: 'look-manager', icon: Bookmark, label: 'Look Manager', shortcut: '⌘⇧B' },
+    { id: 'color-targets', icon: Target, label: 'Color Targets' },
+    { id: 'lut-import', icon: FileUp, label: 'LUT Import' },
+    { id: 'batch', icon: FolderOpen, label: 'Batch Process' },
+    { id: 'adjustments', icon: Settings, label: 'Adjustments', shortcut: '⌘⇧A' },
+    { id: 'integrations', icon: Grid3X3, label: 'Integrations' },
+  ];
 
   return (
     <TooltipProvider delayDuration={300}>
@@ -124,7 +159,7 @@ export default function TopBar({ className }: TopBarProps) {
         initial={{ opacity: 0, y: -10 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
-        className={`flex items-center h-12 px-3 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800/80 gap-1 ${className || ''}`}
+        className="flex items-center h-12 px-2 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800/80 gap-0.5"
       >
         {/* Logo */}
         <Button
@@ -134,10 +169,10 @@ export default function TopBar({ className }: TopBarProps) {
           onClick={() => setViewMode('home')}
         >
           <Grid3X3 className="w-4 h-4 mr-1.5 text-amber-400" />
-          <span className="text-sm font-semibold tracking-tight">LUT Atelier</span>
+          <span className="text-sm font-semibold tracking-tight hidden sm:inline">LUT Atelier</span>
         </Button>
 
-        <div className="w-px h-6 bg-zinc-800 mx-1" />
+        <div className="w-px h-6 bg-zinc-800 mx-0.5" />
 
         {/* File operations */}
         <Tooltip>
@@ -160,7 +195,17 @@ export default function TopBar({ className }: TopBarProps) {
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-zinc-400 hover:text-white"
+              onClick={handleSaveImage}
             >
+              <SaveImage className="w-4 h-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" className="text-xs">Save Image</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-zinc-400 hover:text-white">
               <Undo2 className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
@@ -169,18 +214,14 @@ export default function TopBar({ className }: TopBarProps) {
 
         <Tooltip>
           <TooltipTrigger asChild>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-8 px-2 text-zinc-400 hover:text-white"
-            >
+            <Button variant="ghost" size="sm" className="h-8 px-2 text-zinc-400 hover:text-white">
               <Redo2 className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">Redo</TooltipContent>
         </Tooltip>
 
-        <div className="w-px h-6 bg-zinc-800 mx-1" />
+        <div className="w-px h-6 bg-zinc-800 mx-0.5" />
 
         {/* Compare controls */}
         <DropdownMenu>
@@ -193,7 +234,7 @@ export default function TopBar({ className }: TopBarProps) {
                   className="h-8 px-2 text-zinc-400 hover:text-white"
                 >
                   <Eye className="w-4 h-4 mr-1" />
-                  <span className="text-xs">Compare</span>
+                  <span className="text-xs hidden md:inline">Compare</span>
                   <ChevronDown className="w-3 h-3 ml-1" />
                 </Button>
               </DropdownMenuTrigger>
@@ -207,7 +248,7 @@ export default function TopBar({ className }: TopBarProps) {
               {compareMode === 'off' && <Badge variant="secondary" className="ml-auto text-[10px]">Active</Badge>}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setCompareMode('split')}>
-              <Monitor className="w-3.5 h-3.5 mr-2 text-zinc-400" />
+              <div className="w-3.5 h-3.5 mr-2 border-l-2 border-r-2 border-zinc-400 border-r-amber-400" />
               Split View
               {compareMode === 'split' && <Badge variant="secondary" className="ml-auto text-[10px]">Active</Badge>}
             </DropdownMenuItem>
@@ -236,64 +277,137 @@ export default function TopBar({ className }: TopBarProps) {
           </TooltipContent>
         </Tooltip>
 
-        <div className="w-px h-6 bg-zinc-800 mx-1" />
+        <div className="w-px h-6 bg-zinc-800 mx-0.5" />
 
-        {/* Right panel toggles */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={rightPanel === 'lut-browser' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-8 px-2 text-zinc-400 hover:text-white"
-              onClick={() => setRightPanel(rightPanel === 'lut-browser' ? null : 'lut-browser')}
-            >
-              <Layers className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs">LUT Browser</TooltipContent>
-        </Tooltip>
+        {/* Right panel dropdown - shows most used + "More" */}
+        <div className="hidden md:flex items-center gap-0.5">
+          {/* Primary panels always visible */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'curves' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('curves')}
+              >
+                <Spline className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">Curves</TooltipContent>
+          </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={rightPanel === 'reference' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-8 px-2 text-zinc-400 hover:text-white"
-              onClick={() => setRightPanel(rightPanel === 'reference' ? null : 'reference')}
-            >
-              <Sparkles className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs">AI Reference Match</TooltipContent>
-        </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'channels' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('channels')}
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">Channels</TooltipContent>
+          </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={rightPanel === 'adjustments' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-8 px-2 text-zinc-400 hover:text-white"
-              onClick={() => setRightPanel(rightPanel === 'adjustments' ? null : 'adjustments')}
-            >
-              <Settings className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs">Adjustments</TooltipContent>
-        </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'masks' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('masks')}
+              >
+                <Mask className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">Masks</TooltipContent>
+          </Tooltip>
 
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              variant={rightPanel === 'integrations' ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-8 px-2 text-zinc-400 hover:text-white"
-              onClick={() => setRightPanel(rightPanel === 'integrations' ? null : 'integrations')}
-            >
-              <Grid3X3 className="w-4 h-4" />
-            </Button>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="text-xs">Integrations</TooltipContent>
-        </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'lut-browser' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('lut-browser')}
+              >
+                <Layers className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">LUT Browser</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'reference' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('reference')}
+              >
+                <Sparkles className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">AI Match</TooltipContent>
+          </Tooltip>
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant={rightPanel === 'look-manager' ? 'secondary' : 'ghost'}
+                size="sm"
+                className="h-8 px-2 text-zinc-400 hover:text-white"
+                onClick={() => togglePanel('look-manager')}
+              >
+                <Bookmark className="w-4 h-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">Looks</TooltipContent>
+          </Tooltip>
+        </div>
+
+        {/* More panels dropdown for overflow */}
+        <DropdownMenu>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant={rightPanel && !['curves', 'channels', 'masks', 'lut-browser', 'reference', 'look-manager'].includes(rightPanel) ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-8 px-1.5 text-zinc-400 hover:text-white"
+                >
+                  <Settings className="w-4 h-4" />
+                  <ChevronDown className="w-2.5 h-2.5 ml-0.5" />
+                </Button>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">More Panels</TooltipContent>
+          </Tooltip>
+          <DropdownMenuContent align="start" className="w-52">
+            <DropdownMenuLabel className="text-[10px] text-zinc-500 uppercase tracking-wider">Panels</DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            {panelButtons.map((panel) => {
+              const Icon = panel.icon;
+              return (
+                <DropdownMenuItem
+                  key={panel.id}
+                  onClick={() => togglePanel(panel.id)}
+                  className="flex items-center gap-2"
+                >
+                  <Icon className={`w-3.5 h-3.5 ${rightPanel === panel.id ? 'text-amber-400' : 'text-zinc-400'}`} />
+                  <span className="text-sm">{panel.label}</span>
+                  {panel.shortcut && (
+                    <span className="ml-auto text-[10px] text-zinc-600">{panel.shortcut}</span>
+                  )}
+                  {rightPanel === panel.id && (
+                    <Badge variant="secondary" className="ml-auto text-[10px] px-1">Active</Badge>
+                  )}
+                </DropdownMenuItem>
+              );
+            })}
+          </DropdownMenuContent>
+        </DropdownMenu>
 
         {/* Spacer */}
         <div className="flex-1" />
@@ -327,7 +441,7 @@ export default function TopBar({ className }: TopBarProps) {
               onClick={() => setIsExportOpen(true)}
             >
               <Download className="w-3.5 h-3.5 mr-1.5" />
-              <span className="text-xs">Export</span>
+              <span className="text-xs hidden sm:inline">Export</span>
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">Export LUT / Preset</TooltipContent>

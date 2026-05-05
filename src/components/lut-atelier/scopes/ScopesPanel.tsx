@@ -3,7 +3,8 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { isSkinToneHue } from '@/lib/colorUtils';
+import { useAppStore } from '@/store/useAppStore';
+import { generateHistogram, generateVectorscope } from '@/lib/colorUtils';
 
 interface ScopesPanelProps {
   className?: string;
@@ -172,6 +173,107 @@ function generateDemoParade(): { r: number[][]; g: number[][]; b: number[][] } {
   return { r, g, b };
 }
 
+function generateDemoWaveform(): { y: number[][] } {
+  const width = 512;
+  const height = 256;
+  const rng = (seed: number) => {
+    let s = seed;
+    return () => {
+      s = (s * 16807 + 0) % 2147483647;
+      return (s - 1) / 2147483646;
+    };
+  };
+
+  const rand = rng(999);
+
+  const y: number[][] = Array.from({ length: width }, () => new Array(height).fill(0));
+
+  for (let x = 0; x < width; x++) {
+    const baseLuminance =
+      0.3 + 0.2 * Math.sin(x * 0.02) + 0.15 * Math.sin(x * 0.05 + 1) + 0.1 * Math.sin(x * 0.11 + 2);
+
+    for (let yIdx = 0; yIdx < height; yIdx++) {
+      const yNorm = 1 - yIdx / height;
+      const peak = baseLuminance * (0.75 + rand() * 0.25) * 0.92 + 0.06;
+      y[x][yIdx] = Math.abs(yNorm - peak) < 0.015 ? 1 : 0;
+    }
+  }
+
+  return { y };
+}
+
+// ─────────────────────────────────────────────
+// Real Data Generators from ImageData
+// ─────────────────────────────────────────────
+
+function generateParadeFromImageData(imageData: ImageData, maxWidth = 512): { r: number[][]; g: number[][]; b: number[][] } {
+  const height = 256;
+  const imgW = imageData.width;
+  const imgH = imageData.height;
+  const width = Math.min(maxWidth, imgW);
+  const data = imageData.data;
+
+  const r: number[][] = Array.from({ length: width }, () => new Array(height).fill(0));
+  const g: number[][] = Array.from({ length: width }, () => new Array(height).fill(0));
+  const b: number[][] = Array.from({ length: width }, () => new Array(height).fill(0));
+
+  for (let x = 0; x < width; x++) {
+    const srcX = Math.floor((x / width) * imgW);
+    // Collect all pixel values in this column
+    for (let srcY = 0; srcY < imgH; srcY++) {
+      const idx = (srcY * imgW + srcX) * 4;
+      const rv = data[idx];
+      const gv = data[idx + 1];
+      const bv = data[idx + 2];
+      // Map value to waveform Y position (0=bottom, 255=top, but we store top-down)
+      // yNorm = 0 at bottom (value 255), yNorm = 1 at top (value 0)
+      // So waveform y-index = floor((1 - value/255) * 255) = floor((255-value)/255 * 255)
+      const rY = Math.floor(((255 - rv) / 255) * (height - 1));
+      const gY = Math.floor(((255 - gv) / 255) * (height - 1));
+      const bY = Math.floor(((255 - bv) / 255) * (height - 1));
+      // Mark a small band around the value for visibility
+      for (let dy = -2; dy <= 2; dy++) {
+        const ry = rY + dy;
+        const gy = gY + dy;
+        const by = bY + dy;
+        if (ry >= 0 && ry < height) r[x][ry] = 1;
+        if (gy >= 0 && gy < height) g[x][gy] = 1;
+        if (by >= 0 && by < height) b[x][by] = 1;
+      }
+    }
+  }
+
+  return { r, g, b };
+}
+
+function generateWaveformFromImageData(imageData: ImageData, maxWidth = 512): { y: number[][] } {
+  const height = 256;
+  const imgW = imageData.width;
+  const imgH = imageData.height;
+  const width = Math.min(maxWidth, imgW);
+  const data = imageData.data;
+
+  const luma: number[][] = Array.from({ length: width }, () => new Array(height).fill(0));
+
+  for (let x = 0; x < width; x++) {
+    const srcX = Math.floor((x / width) * imgW);
+    for (let srcY = 0; srcY < imgH; srcY++) {
+      const idx = (srcY * imgW + srcX) * 4;
+      const rv = data[idx];
+      const gv = data[idx + 1];
+      const bv = data[idx + 2];
+      const luminance = 0.299 * rv + 0.587 * gv + 0.114 * bv;
+      const lY = Math.floor(((255 - luminance) / 255) * (height - 1));
+      for (let dy = -2; dy <= 2; dy++) {
+        const ly = lY + dy;
+        if (ly >= 0 && ly < height) luma[x][ly] = 1;
+      }
+    }
+  }
+
+  return { y: luma };
+}
+
 // ─────────────────────────────────────────────
 // Canvas Drawing Utilities
 // ─────────────────────────────────────────────
@@ -237,6 +339,8 @@ function drawRGBHistogram(
     ...data.b.slice(1, 254),
     ...data.luma.slice(1, 254)
   );
+
+  if (maxVal === 0) return;
 
   // Draw filled curves for each channel
   const channels = [
@@ -443,8 +547,8 @@ function drawVectorscope(canvas: HTMLCanvasElement, points: VectorscopePoint[]) 
   for (const point of points) {
     const px = centerX + point.u * scale;
     const py = centerY - point.v * scale;
-    const size = 1 + point.count * 0.3;
-    const alpha = 0.15 + Math.min(0.5, point.count * 0.08);
+    const size = 1 + (point.count || 1) * 0.3;
+    const alpha = 0.15 + Math.min(0.5, (point.count || 1) * 0.08);
 
     ctx.beginPath();
     ctx.arc(px, py, size, 0, Math.PI * 2);
@@ -611,6 +715,140 @@ function drawRGBParade(
 }
 
 // ─────────────────────────────────────────────
+// Waveform (Luminance) Renderer
+// ─────────────────────────────────────────────
+
+function drawWaveform(
+  canvas: HTMLCanvasElement,
+  data: { y: number[][] }
+) {
+  const rect = canvas.parentElement?.getBoundingClientRect();
+  if (!rect) return;
+
+  const w = rect.width;
+  const h = rect.height;
+  const ctx = setupCanvas(canvas, w, h);
+  if (!ctx) return;
+
+  const padding = { top: 16, right: 8, bottom: 24, left: 30 };
+  const plotW = w - padding.left - padding.right;
+  const plotH = h - padding.top - padding.bottom;
+
+  // Clear
+  ctx.fillStyle = '#0a0a0a';
+  ctx.fillRect(0, 0, w, h);
+
+  // Channel background
+  ctx.fillStyle = 'rgba(255,255,255,0.02)';
+  ctx.fillRect(padding.left, padding.top, plotW, plotH);
+
+  // Horizontal grid lines + IRE markers
+  const ireLevels = [
+    { pct: 100, label: '100' },
+    { pct: 75, label: '75' },
+    { pct: 50, label: '50' },
+    { pct: 25, label: '25' },
+    { pct: 0, label: '0' },
+  ];
+
+  for (const level of ireLevels) {
+    const y = padding.top + plotH * (1 - level.pct / 100);
+
+    // Grid line
+    ctx.strokeStyle = level.pct === 0 || level.pct === 100
+      ? 'rgba(255,255,255,0.12)'
+      : 'rgba(255,255,255,0.06)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(w - padding.right, y);
+    ctx.stroke();
+
+    // IRE label on the left
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    ctx.font = '8px ui-monospace, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(level.label, padding.left - 4, y + 3);
+  }
+
+  // Vertical grid
+  const vLines = 8;
+  for (let i = 0; i <= vLines; i++) {
+    const x = padding.left + (plotW / vLines) * i;
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, padding.top);
+    ctx.lineTo(x, padding.top + plotH);
+    ctx.stroke();
+  }
+
+  // Draw waveform using ImageData for performance
+  const dataW = data.y.length;
+  const dataH = data.y[0]?.length || 0;
+  if (dataW === 0 || dataH === 0) return;
+
+  const imgData = ctx.createImageData(Math.ceil(plotW), Math.ceil(plotH));
+  const pixels = imgData.data;
+
+  for (let py = 0; py < plotH; py++) {
+    for (let px = 0; px < plotW; px++) {
+      const dataX = Math.floor((px / plotW) * dataW);
+      const dataY = Math.floor((py / plotH) * dataH);
+
+      if (dataX < dataW && dataY < dataH && data.y[dataX][dataY] > 0) {
+        const idx = (py * Math.ceil(plotW) + px) * 4;
+        // White/gray glow
+        pixels[idx] = 220;
+        pixels[idx + 1] = 220;
+        pixels[idx + 2] = 220;
+        pixels[idx + 3] = 160;
+      }
+    }
+  }
+
+  ctx.putImageData(imgData, padding.left, padding.top);
+
+  // Draw a brighter center line for the waveform
+  ctx.beginPath();
+  for (let x = 0; x < plotW; x++) {
+    const dataX = Math.floor((x / plotW) * dataW);
+    if (dataX >= dataW) continue;
+
+    // Find the peak Y value (topmost active pixel = highest luminance)
+    const col = data.y[dataX];
+    let peakY = -1;
+    for (let y = 0; y < col.length; y++) {
+      if (col[y] > 0) {
+        if (peakY === -1 || y < peakY) peakY = y;
+      }
+    }
+    if (peakY >= 0) {
+      const canvasY = padding.top + (peakY / (col.length - 1)) * plotH;
+      if (x === 0) {
+        ctx.moveTo(padding.left + x, canvasY);
+      } else {
+        ctx.lineTo(padding.left + x, canvasY);
+      }
+    }
+  }
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Label
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = 'bold 11px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('LUMA', padding.left + plotW / 2, h - padding.bottom + 16);
+
+  // Outer border
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, 0.5, w - 1, h - 1);
+}
+
+// ─────────────────────────────────────────────
 // Individual Scope Canvas Wrapper
 // ─────────────────────────────────────────────
 
@@ -664,31 +902,127 @@ function ScopeCanvas({ drawFn, active }: ScopeCanvasProps) {
 }
 
 // ─────────────────────────────────────────────
+// LIVE Indicator Badge
+// ─────────────────────────────────────────────
+
+function LiveIndicator({ isLive }: { isLive: boolean }) {
+  if (!isLive) return null;
+
+  return (
+    <span className="inline-flex items-center gap-1 ml-2 px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider bg-[rgba(34,197,94,0.15)] text-[rgba(34,197,94,0.9)] border border-[rgba(34,197,94,0.25)]">
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[rgba(34,197,94,0.6)] opacity-75" />
+        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[rgba(34,197,94,0.9)]" />
+      </span>
+      LIVE
+    </span>
+  );
+}
+
+// ─────────────────────────────────────────────
 // Main Scopes Panel Component
 // ─────────────────────────────────────────────
 
 export default function ScopesPanel({ className }: ScopesPanelProps) {
   const [activeTab, setActiveTab] = useState('histogram');
+  const currentImage = useAppStore((s) => s.currentImage);
 
-  // Generate demo data once
+  // Track whether we have real image data
+  const [isLive, setIsLive] = useState(false);
+  // Version counter to trigger re-renders when scope data changes
+  const [scopeVersion, setScopeVersion] = useState(0);
+
+  // Scope data refs
   const histogramData = useRef(generateDemoHistogram());
   const vectorscopeData = useRef(generateDemoVectorscope());
   const paradeData = useRef(generateDemoParade());
+  const waveformData = useRef(generateDemoWaveform());
 
-  // Memoize draw functions
+  // Extract real image data when currentImage changes
+  useEffect(() => {
+    if (!currentImage?.dataUrl) {
+      // No image loaded — fall back to demo data
+      histogramData.current = generateDemoHistogram();
+      vectorscopeData.current = generateDemoVectorscope();
+      paradeData.current = generateDemoParade();
+      waveformData.current = generateDemoWaveform();
+      setIsLive(false);
+      setScopeVersion((v) => v + 1);
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      // Downsample to max 512px wide for performance
+      const scale = Math.min(1, 512 / img.width);
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+      // Generate histogram from real data
+      histogramData.current = generateHistogram(imageData);
+
+      // Generate vectorscope from real data (add count=1 for compatibility)
+      const rawVectorscope = generateVectorscope(imageData);
+      vectorscopeData.current = rawVectorscope.map((p) => ({
+        u: p.u,
+        v: p.v,
+        r: p.r,
+        g: p.g,
+        b: p.b,
+        count: 1,
+      }));
+
+      // Generate parade from real data
+      paradeData.current = generateParadeFromImageData(imageData);
+
+      // Generate waveform from real data
+      waveformData.current = generateWaveformFromImageData(imageData);
+
+      setIsLive(true);
+      setScopeVersion((v) => v + 1);
+    };
+    img.onerror = () => {
+      // On error, keep demo data
+      setIsLive(false);
+      setScopeVersion((v) => v + 1);
+    };
+    img.src = currentImage.dataUrl;
+
+    // Cleanup
+    return () => {
+      img.onload = null;
+      img.onerror = null;
+    };
+  }, [currentImage]);
+
+  // Memoize draw functions — depend on scopeVersion so they re-trigger redraws
   const drawHistogram = useCallback(
     (canvas: HTMLCanvasElement) => drawRGBHistogram(canvas, histogramData.current),
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeVersion] // scopeVersion triggers redraw when image data changes
   );
 
   const renderVectorscope = useCallback(
     (canvas: HTMLCanvasElement) => drawVectorscope(canvas, vectorscopeData.current),
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeVersion] // scopeVersion triggers redraw when image data changes
   );
 
   const renderParade = useCallback(
     (canvas: HTMLCanvasElement) => drawRGBParade(canvas, paradeData.current),
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeVersion] // scopeVersion triggers redraw when image data changes
+  );
+
+  const renderWaveform = useCallback(
+    (canvas: HTMLCanvasElement) => drawWaveform(canvas, waveformData.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scopeVersion] // scopeVersion triggers redraw when image data changes
   );
 
   const tabVariants = {
@@ -705,7 +1039,7 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
         className="flex flex-col h-full"
       >
         {/* Tab Header */}
-        <div className="shrink-0 px-3 pt-3 pb-1">
+        <div className="shrink-0 px-3 pt-3 pb-1 flex items-center justify-between">
           <TabsList className="bg-[#1a1a1a] border border-[rgba(255,255,255,0.06)] h-8 rounded-md">
             <TabsTrigger
               value="histogram"
@@ -731,6 +1065,18 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
               </span>
             </TabsTrigger>
             <TabsTrigger
+              value="waveform"
+              className="text-[11px] font-medium tracking-wide px-3 h-7 rounded-[5px] data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-white text-[rgba(255,255,255,0.45)] data-[state=active]:shadow-none transition-colors"
+            >
+              <span className="flex items-center gap-1.5">
+                <svg width="14" height="10" viewBox="0 0 14 10" fill="none" className="opacity-60">
+                  <rect x="0" y="0" width="14" height="10" rx="0.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                  <path d="M2 8L5 3L8 6L12 2" stroke="currentColor" strokeWidth="1.2" fill="none" />
+                </svg>
+                Waveform
+              </span>
+            </TabsTrigger>
+            <TabsTrigger
               value="parade"
               className="text-[11px] font-medium tracking-wide px-3 h-7 rounded-[5px] data-[state=active]:bg-[#2a2a2a] data-[state=active]:text-white text-[rgba(255,255,255,0.45)] data-[state=active]:shadow-none transition-colors"
             >
@@ -744,6 +1090,7 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
               </span>
             </TabsTrigger>
           </TabsList>
+          <LiveIndicator isLive={isLive} />
         </div>
 
         {/* Scope Content */}
@@ -774,6 +1121,20 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
                 className="w-full h-full rounded-lg overflow-hidden border border-[rgba(255,255,255,0.06)]"
               >
                 <ScopeCanvas drawFn={renderVectorscope} active={true} />
+              </motion.div>
+            )}
+
+            {activeTab === 'waveform' && (
+              <motion.div
+                key="waveform"
+                variants={tabVariants}
+                initial="hidden"
+                animate="visible"
+                exit="exit"
+                transition={{ duration: 0.2, ease: 'easeOut' }}
+                className="w-full h-full rounded-lg overflow-hidden border border-[rgba(255,255,255,0.06)]"
+              >
+                <ScopeCanvas drawFn={renderWaveform} active={true} />
               </motion.div>
             )}
 
