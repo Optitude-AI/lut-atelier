@@ -11,14 +11,15 @@ import {
   ZoomOut,
   Maximize2,
   MonitorDot,
-  ChevronLeft,
-  ChevronRight,
   GripVertical,
+  Upload,
+  ImagePlus,
   X,
 } from 'lucide-react';
-import { useAppStore, type CompareMode, type LUTItem } from '@/store/useAppStore';
+import { useAppStore, type CompareMode, type LUTItem, type ImageInfo } from '@/store/useAppStore';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 
 interface ImageViewerProps {
   className?: string;
@@ -42,7 +43,7 @@ const CATEGORY_FILTERS: Record<LUTItem['category'], CSSFilterValues> = {
   cool:          { hueRotate: -15, saturate: 0.88, contrast: 1.06, brightness: 1.05, sepia: 0,    grayscale: 0 },
   cinematic:     { hueRotate: -5,  saturate: 0.82, contrast: 1.18, brightness: 0.94, sepia: 0.06, grayscale: 0 },
   pastel:        { hueRotate: 3,   saturate: 0.65, contrast: 0.92, brightness: 1.12, sepia: 0.05, grayscale: 0 },
-  'high-contrast': { hueRotate: 0, saturate: 1.1,  contrast: 1.35, brightness: 1.0,  sepia: 0,    grayscale: 0 },
+  'high-contrast': { hueRotate: 0, saturate: 1.1, contrast: 1.35, brightness: 1.0,  sepia: 0,    grayscale: 0 },
   film:          { hueRotate: 8,   saturate: 0.85, contrast: 1.12, brightness: 0.96, sepia: 0.15, grayscale: 0 },
   portrait:      { hueRotate: 6,   saturate: 1.12, contrast: 1.05, brightness: 1.06, sepia: 0.08, grayscale: 0 },
   wedding:       { hueRotate: 4,   saturate: 0.88, contrast: 0.95, brightness: 1.1,  sepia: 0.08, grayscale: 0 },
@@ -52,7 +53,7 @@ const CATEGORY_FILTERS: Record<LUTItem['category'], CSSFilterValues> = {
 
 function interpolateFilter(
   base: CSSFilterValues,
-  intensity: number // 0..100
+  intensity: number
 ): string {
   const t = intensity / 100;
   const hueRotate = base.hueRotate * t;
@@ -80,106 +81,6 @@ const COLOR_SPACE_CONFIG = {
   'adobe-rgb': { label: 'Adobe RGB',   color: 'bg-sky-500/20 text-sky-400 border-sky-500/30' },
   'prophoto-rgb': { label: 'ProPhoto RGB', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
 } as const;
-
-/* -------------------------------------------------------------------------- */
-/*  Demo gradient image (simulates a colorful landscape photograph)           */
-/* -------------------------------------------------------------------------- */
-
-function DemoImage({ className, style }: { className?: string; style?: React.CSSProperties }) {
-  return (
-    <div
-      className={className}
-      style={{
-        ...style,
-        background: `
-          radial-gradient(ellipse 80% 50% at 65% 25%, rgba(255,180,100,0.5) 0%, transparent 60%),
-          radial-gradient(ellipse 60% 40% at 30% 35%, rgba(255,120,80,0.3) 0%, transparent 50%),
-          radial-gradient(ellipse 50% 30% at 80% 20%, rgba(255,220,150,0.4) 0%, transparent 50%),
-          linear-gradient(180deg,
-            #1a0533 0%,
-            #2d1b69 8%,
-            #6b2fa0 14%,
-            #c94e4e 20%,
-            #e8834a 26%,
-            #f2b840 32%,
-            #f7d76a 38%,
-            #6b8f3a 40%,
-            #4a7a2e 44%,
-            #3d6328 52%,
-            #2d4a1e 60%,
-            #1e3518 70%,
-            #162e14 80%,
-            #0d1f0d 90%,
-            #081208 100%
-          )
-        `,
-      }}
-    >
-      {/* "Subject" silhouette for visual interest */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '0%',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          width: '30%',
-          height: '55%',
-          background: `
-            radial-gradient(ellipse 50% 40% at 50% 100%, rgba(10,15,5,0.85) 0%, transparent 70%),
-            radial-gradient(ellipse 120% 30% at 50% 100%, rgba(15,25,8,0.7) 0%, transparent 60%)
-          `,
-        }}
-      />
-      {/* Sun glow */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '24%',
-          left: '62%',
-          width: '80px',
-          height: '80px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, rgba(255,245,220,0.95) 0%, rgba(255,200,100,0.6) 30%, rgba(255,150,60,0.2) 60%, transparent 80%)',
-          boxShadow: '0 0 60px 30px rgba(255,200,100,0.3)',
-        }}
-      />
-      {/* Cloud wisps */}
-      <div
-        style={{
-          position: 'absolute',
-          top: '10%',
-          left: '10%',
-          width: '45%',
-          height: '15%',
-          background: 'radial-gradient(ellipse 100% 100% at 50% 50%, rgba(180,120,160,0.25) 0%, transparent 60%)',
-          filter: 'blur(12px)',
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          top: '6%',
-          left: '45%',
-          width: '35%',
-          height: '12%',
-          background: 'radial-gradient(ellipse 100% 100% at 40% 50%, rgba(200,140,120,0.2) 0%, transparent 55%)',
-          filter: 'blur(10px)',
-        }}
-      />
-      {/* Water reflection at bottom */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '0%',
-          left: '0%',
-          width: '100%',
-          height: '18%',
-          background: 'linear-gradient(180deg, rgba(245,215,106,0.15) 0%, rgba(200,100,50,0.1) 40%, rgba(30,50,20,0.3) 100%)',
-        }}
-      />
-    </div>
-  );
-}
 
 /* -------------------------------------------------------------------------- */
 /*  Checkerboard pattern                                                      */
@@ -226,11 +127,197 @@ function ImageLabel({ text, side }: { text: string; side: 'left' | 'right' }) {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Image file reader utility                                                 */
+/* -------------------------------------------------------------------------- */
+
+function readImageFile(file: File): Promise<ImageInfo> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Not an image file'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        resolve({
+          dataUrl,
+          name: file.name,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = dataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Drop zone (shown when no image is loaded)                                 */
+/* -------------------------------------------------------------------------- */
+
+function DropZone({ onImageLoad }: { onImageLoad: (info: ImageInfo) => void }) {
+  const [isDragging, setIsDragging] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFiles = useCallback(async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    try {
+      const info = await readImageFile(files[0]);
+      onImageLoad(info);
+    } catch {
+      // silently ignore invalid files
+    }
+  }, [onImageLoad]);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    handleFiles(e.dataTransfer.files);
+  }, [handleFiles]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.4 }}
+      className="flex h-full w-full items-center justify-center p-8"
+    >
+      <div
+        className={`
+          relative flex flex-col items-center justify-center gap-6
+          w-full max-w-lg rounded-2xl border-2 border-dashed
+          transition-all duration-300 cursor-pointer
+          ${isDragging
+            ? 'border-amber-400/60 bg-amber-500/5 scale-[1.02]'
+            : 'border-zinc-700/60 bg-zinc-900/30 hover:border-zinc-600 hover:bg-zinc-900/50'
+          }
+        `}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        {/* Icon */}
+        <div className={`
+          flex items-center justify-center w-16 h-16 rounded-2xl
+          transition-colors duration-300
+          ${isDragging ? 'bg-amber-500/10' : 'bg-zinc-800'}
+        `}>
+          <Upload className={`w-8 h-8 transition-colors duration-300 ${isDragging ? 'text-amber-400' : 'text-zinc-500'}`} />
+        </div>
+
+        {/* Text */}
+        <div className="text-center">
+          <p className="text-sm font-medium text-zinc-300 mb-1">
+            {isDragging ? 'Drop your photo here' : 'Import a Photo'}
+          </p>
+          <p className="text-xs text-zinc-500">
+            Drag & drop an image, or click to browse
+          </p>
+        </div>
+
+        {/* Supported formats */}
+        <div className="flex items-center gap-2 text-[10px] text-zinc-600 uppercase tracking-wider">
+          <span>JPG</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>TIFF</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>PNG</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>WebP</span>
+          <span className="w-1 h-1 rounded-full bg-zinc-700" />
+          <span>PSD</span>
+        </div>
+
+        {/* Browse button */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500"
+          onClick={(e) => {
+            e.stopPropagation();
+            fileInputRef.current?.click();
+          }}
+        >
+          <ImagePlus className="w-4 h-4 mr-2" />
+          Browse Files
+        </Button>
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => {
+            handleFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Graded image component                                                    */
+/* -------------------------------------------------------------------------- */
+
+function GradedImage({
+  image,
+  filter,
+  style,
+  className,
+}: {
+  image: ImageInfo;
+  filter: string;
+  style?: React.CSSProperties;
+  className?: string;
+}) {
+  return (
+    <img
+      src={image.dataUrl}
+      alt={image.name}
+      draggable={false}
+      className={className}
+      style={{
+        ...style,
+        filter: filter !== 'none' ? filter : undefined,
+        transition: 'filter 0.3s ease',
+        objectFit: 'contain',
+        userSelect: 'none',
+        WebkitUserDrag: 'none',
+      }}
+    />
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Main Component                                                            */
 /* -------------------------------------------------------------------------- */
 
 export default function ImageViewer({ className }: ImageViewerProps) {
   const {
+    currentImage,
+    setCurrentImage,
     compareMode,
     setCompareMode,
     splitPosition,
@@ -247,6 +334,24 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   const [isBefore, setIsBefore] = useState(false);
   const [zoom, setZoom] = useState<'fit' | '100' | '200'>('fit');
+  const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  /* ----- Observe container size ----- */
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setContainerSize({
+          w: entry.contentRect.width,
+          h: entry.contentRect.height,
+        });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   /* ----- Derived state ----- */
 
@@ -262,8 +367,41 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   }, [activeLut, globalIntensity]);
 
   const colorSpaceInfo = COLOR_SPACE_CONFIG[settings.colorSpace];
+  const hasImage = currentImage !== null;
 
-  const showComparison = compareMode !== 'off';
+  /* ----- Image load handler ----- */
+
+  const handleImageLoad = useCallback((info: ImageInfo) => {
+    setCurrentImage(info);
+  }, [setCurrentImage]);
+
+  /* ----- Drop to replace image ----- */
+
+  const handleContainerDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(true);
+  }, []);
+
+  const handleContainerDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  }, []);
+
+  const handleContainerDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+    const files = e.dataTransfer.files;
+    if (!files || files.length === 0) return;
+    try {
+      const info = await readImageFile(files[0]);
+      setCurrentImage(info);
+    } catch {
+      // silently ignore
+    }
+  }, [setCurrentImage]);
 
   /* ----- Before/After press-and-hold ----- */
 
@@ -323,8 +461,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     setZoom(levels[(idx + 1) % levels.length]);
   }, [zoom]);
 
-  const zoomScale = zoom === 'fit' ? 1 : zoom === '100' ? 1 : 2;
-
   /* ----- Compare mode icons ----- */
 
   const CompareIcon = useMemo(() => {
@@ -346,16 +482,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     }
   }, [compareMode]);
 
-  /* ----- Image wrapper style ----- */
-
-  const imageWrapperStyle = useMemo((): React.CSSProperties => {
-    if (zoom === 'fit') return {};
-    return {
-      transform: `scale(${zoomScale})`,
-      transformOrigin: 'center center',
-    };
-  }, [zoom, zoomScale]);
-
   /* ----- Effective filter (respects isBefore toggle) ----- */
 
   const effectiveFilter = isBefore ? 'none' : gradedFilter;
@@ -369,32 +495,88 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   }, []);
 
   /* ======================================================================== */
-  /*  Render                                                                  */
+  /*  Render — No image: show Drop Zone                                       */
   /* ======================================================================== */
+
+  if (!hasImage) {
+    return (
+      <div
+        className={`relative flex h-full w-full select-none flex-col overflow-hidden ${className ?? ''}`}
+        style={{ backgroundColor: '#1a1a1a' }}
+      >
+        <DropZone onImageLoad={handleImageLoad} />
+      </div>
+    );
+  }
+
+  /* ======================================================================== */
+  /*  Render — With image                                                      */
+  /* ======================================================================== */
+
+  const img = currentImage!;
 
   return (
     <div
       ref={containerRef}
       className={`relative flex h-full w-full select-none flex-col overflow-hidden ${className ?? ''}`}
       style={{ backgroundColor: '#1a1a1a' }}
+      onDragOver={handleContainerDragOver}
+      onDragLeave={handleContainerDragLeave}
+      onDrop={handleContainerDrop}
     >
+      {/* Drag overlay */}
+      <AnimatePresence>
+        {isDragOver && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          >
+            <div className="flex flex-col items-center gap-3 text-white">
+              <Upload className="w-10 h-10 text-amber-400" />
+              <p className="text-sm font-medium">Drop to replace image</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Image info badge (top-left) */}
+      <motion.div
+        initial={{ opacity: 0, x: -8 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ delay: 0.3 }}
+        className="absolute left-3 top-3 z-40 pointer-events-none"
+      >
+        <div className="flex items-center gap-2 rounded-lg bg-black/50 backdrop-blur-sm px-2.5 py-1.5 border border-white/[0.06]">
+          <span className="text-[11px] text-white/70 font-medium truncate max-w-[200px]">{img.name}</span>
+          <span className="text-[10px] text-white/40 font-mono">{img.width}×{img.height}</span>
+        </div>
+      </motion.div>
+
       {/* ----- Workspace area ----- */}
       <div className="relative flex flex-1 items-center justify-center overflow-auto p-4">
         <CheckerboardPattern />
 
         <motion.div
           className="relative z-10"
-          style={{ ...imageWrapperStyle, maxWidth: '100%', maxHeight: '100%' }}
+          style={{ maxWidth: '100%', maxHeight: '100%' }}
           initial={{ opacity: 0, scale: 0.96 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.4, ease: 'easeOut' }}
         >
           {/* -------- OFF / Single view -------- */}
           {compareMode === 'off' && (
-            <div className="relative" style={{ width: '640px', height: '427px' }}>
-              <DemoImage
-                className="absolute inset-0 rounded-lg shadow-2xl shadow-black/50"
-                style={{ filter: effectiveFilter, transition: 'filter 0.3s ease' }}
+            <div className="relative inline-block">
+              <GradedImage
+                image={img}
+                filter={effectiveFilter}
+                className="rounded-lg shadow-2xl shadow-black/50 max-w-full max-h-full"
+                style={{
+                  maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
+                  maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
+                  width: zoom === 'fit' ? 'auto' : undefined,
+                }}
               />
               <AnimatePresence>
                 {isBefore && (
@@ -417,25 +599,19 @@ export default function ImageViewer({ className }: ImageViewerProps) {
           {/* -------- SPLIT view -------- */}
           {compareMode === 'split' && (
             <div
-              className="relative overflow-hidden rounded-lg shadow-2xl shadow-black/50"
-              style={{ width: '640px', height: '427px' }}
+              className="relative overflow-hidden rounded-lg shadow-2xl shadow-black/50 inline-block"
             >
-              {/* Original (left side) — clipped to split position */}
-              <div
-                className="absolute inset-0 overflow-hidden"
-                style={{ width: `${splitPosition}%` }}
-              >
-                <DemoImage
-                  className="absolute inset-0"
-                  style={{
-                    width: '640px',
-                    maxWidth: 'none',
-                    filter: 'none',
-                  }}
-                />
-              </div>
+              <GradedImage
+                image={img}
+                filter="none"
+                className="block"
+                style={{
+                  maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
+                  maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
+                }}
+              />
 
-              {/* Graded (right side) — clipped from split position */}
+              {/* Graded overlay clipped from split position */}
               <div
                 className="absolute inset-0 overflow-hidden"
                 style={{
@@ -443,14 +619,16 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   width: `${100 - splitPosition}%`,
                 }}
               >
-                <DemoImage
-                  className="absolute inset-0"
+                <GradedImage
+                  image={img}
+                  filter={effectiveFilter}
+                  className="block"
                   style={{
-                    width: '640px',
+                    maxWidth: containerSize.w > 0 ? containerSize.w - 48 : undefined,
+                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
+                    marginLeft: `-${splitPosition}%`,
+                    width: `${100 / (100 - splitPosition) * 100}%`,
                     maxWidth: 'none',
-                    left: `-${splitPosition}%`,
-                    filter: isBefore ? 'none' : gradedFilter,
-                    transition: 'filter 0.3s ease',
                   }}
                 />
               </div>
@@ -468,14 +646,12 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                 onPointerMove={handleSplitPointerMove}
                 onPointerUp={handleSplitPointerUp}
               >
-                {/* Gradient line */}
                 <div
                   className="h-full w-[2px]"
                   style={{
                     background: 'linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.9) 15%, rgba(255,255,255,0.9) 85%, rgba(255,255,255,0) 100%)',
                   }}
                 />
-                {/* Handle */}
                 <div className="absolute top-1/2 flex -translate-y-1/2 flex-col items-center gap-0.5">
                   <div
                     className="flex h-10 w-6 items-center justify-center rounded-full border border-white/30"
@@ -494,38 +670,41 @@ export default function ImageViewer({ className }: ImageViewerProps) {
           {/* -------- SIDE-BY-SIDE view -------- */}
           {compareMode === 'side-by-side' && (
             <div className="flex gap-3">
-              {/* Original */}
-              <div className="relative">
+              <div className="relative inline-block">
                 <ImageLabel text="Original" side="left" />
-                <DemoImage
-                  className="rounded-lg shadow-2xl shadow-black/50"
-                  style={{ width: '400px', height: '267px', filter: 'none' }}
-                />
-              </div>
-              {/* Graded */}
-              <div className="relative">
-                <ImageLabel text="Graded" side="right" />
-                <DemoImage
+                <GradedImage
+                  image={img}
+                  filter="none"
                   className="rounded-lg shadow-2xl shadow-black/50"
                   style={{
-                    width: '400px',
-                    height: '267px',
-                    filter: isBefore ? 'none' : gradedFilter,
-                    transition: 'filter 0.3s ease',
+                    maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
+                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
+                  }}
+                />
+              </div>
+              <div className="relative inline-block">
+                <ImageLabel text="Graded" side="right" />
+                <GradedImage
+                  image={img}
+                  filter={effectiveFilter}
+                  className="rounded-lg shadow-2xl shadow-black/50"
+                  style={{
+                    maxWidth: (containerSize.w > 0 ? containerSize.w - 80 : 600) / 2,
+                    maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                   }}
                 />
               </div>
             </div>
           )}
 
-          {/* -------- Zoomed overflow indicators -------- */}
+          {/* Zoomed overflow indicators */}
           {zoom !== 'fit' && (
             <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               className="absolute -top-8 left-1/2 -translate-x-1/2 rounded-md bg-black/60 px-2.5 py-1 text-[11px] text-white/70 backdrop-blur-sm"
             >
-              {zoom === '100' ? '100%' : '200%'}
+              {zoom}%
             </motion.div>
           )}
         </motion.div>
@@ -548,7 +727,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             WebkitBackdropFilter: 'blur(20px) saturate(1.5)',
           }}
         >
-          {/* Before/After button — press and hold */}
+          {/* Before/After button */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -581,7 +760,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipContent>
           </Tooltip>
 
-          {/* Separator */}
           <div className="mx-1 h-5 w-px bg-white/[0.08]" />
 
           {/* Compare mode switcher */}
@@ -590,7 +768,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
               <button
                 className="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
                 onClick={cycleCompareMode}
-                aria-label={`Comparison mode: ${compareLabel}. Click to change.`}
+                aria-label={`Comparison mode: ${compareLabel}`}
               >
                 <CompareIcon className="h-[18px] w-[18px]" />
                 <span className="text-[11px] font-medium tracking-wide">{compareLabel}</span>
@@ -601,29 +779,9 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipContent>
           </Tooltip>
 
-          {/* Separator */}
           <div className="mx-1 h-5 w-px bg-white/[0.08]" />
 
-          {/* Zoom controls */}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="flex h-9 w-9 items-center justify-center rounded-lg text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
-                onClick={() => {
-                  const levels: Array<'fit' | '100' | '200'> = ['200', '100', 'fit'];
-                  const idx = levels.indexOf(zoom);
-                  setZoom(levels[(idx + 1) % levels.length]);
-                }}
-                aria-label="Zoom out"
-              >
-                <ZoomOut className="h-[18px] w-[18px]" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
-              Zoom out
-            </TooltipContent>
-          </Tooltip>
-
+          {/* Zoom */}
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -643,26 +801,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipContent>
           </Tooltip>
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                className="flex h-9 w-9 items-center justify-center rounded-lg text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
-                onClick={() => {
-                  const levels: Array<'fit' | '100' | '200'> = ['fit', '100', '200'];
-                  const idx = levels.indexOf(zoom);
-                  setZoom(levels[(idx + 1) % levels.length]);
-                }}
-                aria-label="Zoom in"
-              >
-                <ZoomIn className="h-[18px] w-[18px]" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
-              Zoom in
-            </TooltipContent>
-          </Tooltip>
-
-          {/* Separator */}
           <div className="mx-1 h-5 w-px bg-white/[0.08]" />
 
           {/* Color space badge */}
@@ -701,7 +839,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                 backdropFilter: 'blur(12px)',
               }}
             >
-              {/* Mini gradient swatch */}
               <div
                 className="h-5 w-5 rounded-md"
                 style={{

@@ -34,8 +34,36 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, type ImageInfo } from '@/store/useAppStore';
 import { useTheme } from 'next-themes';
+import { useCallback } from 'react';
+import { useToast } from '@/hooks/use-toast';
+
+function readImageFile(file: File): Promise<ImageInfo> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Not an image file'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        resolve({
+          dataUrl,
+          name: file.name,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = dataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
 
 interface TopBarProps {
   className?: string;
@@ -60,6 +88,33 @@ export default function TopBar({ className }: TopBarProps) {
     lutItems,
   } = useAppStore();
   const { theme, setTheme } = useTheme();
+  const { toast } = useToast();
+  const setCurrentImage = useAppStore((s) => s.setCurrentImage);
+
+  const handleOpenImage = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const info = await readImageFile(file);
+        setCurrentImage(info);
+        toast({
+          title: 'Image imported',
+          description: `${info.name} (${info.width}×${info.height})`,
+        });
+      } catch {
+        toast({
+          title: 'Failed to import image',
+          description: 'Please select a valid image file.',
+          variant: 'destructive',
+        });
+      }
+    };
+    input.click();
+  }, [setCurrentImage, toast]);
 
   const activeLut = lutItems.find(l => l.id === activeLutId);
 
@@ -91,12 +146,7 @@ export default function TopBar({ className }: TopBarProps) {
               variant="ghost"
               size="sm"
               className="h-8 px-2 text-zinc-400 hover:text-white"
-              onClick={() => {
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = 'image/*';
-                input.click();
-              }}
+              onClick={handleOpenImage}
             >
               <ImagePlus className="w-4 h-4" />
             </Button>

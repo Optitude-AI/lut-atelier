@@ -53,6 +53,13 @@ export interface ReferenceImage {
   palette: string[];
 }
 
+export interface ImageInfo {
+  dataUrl: string;
+  name: string;
+  width: number;
+  height: number;
+}
+
 export interface AppSettings {
   colorSpace: 'srgb' | 'adobe-rgb' | 'prophoto-rgb';
   bitDepth: '8' | '16' | '32';
@@ -67,9 +74,9 @@ export interface AppStore {
   setViewMode: (mode: ViewMode) => void;
 
   // Current image
-  currentImage: string | null;
-  setCurrentImage: (url: string | null) => void;
-  imageHistory: string[];
+  currentImage: ImageInfo | null;
+  setCurrentImage: (info: ImageInfo | null) => void;
+  imageHistory: ImageInfo[];
 
   // Compare
   compareMode: CompareMode;
@@ -214,9 +221,9 @@ export const useAppStore = create<AppStore>((set) => ({
 
   // Current image
   currentImage: null,
-  setCurrentImage: (url) => set((state) => ({
-    currentImage: url,
-    imageHistory: url ? [url, ...state.imageHistory.filter(h => h !== url)].slice(0, 20) : state.imageHistory,
+  setCurrentImage: (info) => set((state) => ({
+    currentImage: info,
+    imageHistory: info ? [info, ...state.imageHistory.filter(h => h.dataUrl !== info.dataUrl)].slice(0, 20) : state.imageHistory,
   })),
   imageHistory: [],
 

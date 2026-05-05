@@ -1,5 +1,6 @@
 'use client';
 
+import { useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
   Upload,
@@ -22,8 +23,34 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useAppStore } from '@/store/useAppStore';
+import { useAppStore, type ImageInfo } from '@/store/useAppStore';
 import { useToast } from '@/hooks/use-toast';
+
+function readImageFile(file: File): Promise<ImageInfo> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) {
+      reject(new Error('Not an image file'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        resolve({
+          dataUrl,
+          name: file.name,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
+      };
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = dataUrl;
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
 
 const featureCards = [
   {
@@ -85,16 +112,41 @@ const recentLooks = [
 ];
 
 export default function HomeScreen() {
-  const { setViewMode, setActiveLutId, lutItems } = useAppStore();
+  const { setViewMode, setActiveLutId, setCurrentImage, lutItems } = useAppStore();
   const { toast } = useToast();
 
   const handleOpenDemo = () => {
     setViewMode('workspace');
-    // Auto-select the first LUT for demo
     if (lutItems.length > 0) {
       setActiveLutId(lutItems[0].id);
     }
   };
+
+  const handleImportPhoto = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (!file) return;
+      try {
+        const info = await readImageFile(file);
+        setCurrentImage(info);
+        setViewMode('workspace');
+        toast({
+          title: 'Image imported',
+          description: `${info.name} (${info.width}×${info.height})`,
+        });
+      } catch {
+        toast({
+          title: 'Failed to import',
+          description: 'Please select a valid image file.',
+          variant: 'destructive',
+        });
+      }
+    };
+    input.click();
+  }, [setCurrentImage, setViewMode, toast]);
 
   const handleGuidedMode = (mode: string) => {
     setViewMode('workspace');
@@ -155,19 +207,7 @@ export default function HomeScreen() {
                 variant="outline"
                 size="lg"
                 className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 px-8 h-12 text-base"
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/*';
-                  input.onchange = (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) {
-                      toast({ title: 'Image loaded', description: file.name });
-                      setViewMode('workspace');
-                    }
-                  };
-                  input.click();
-                }}
+                onClick={handleImportPhoto}
               >
                 <Upload className="w-4 h-4 mr-2" />
                 Import Photo
