@@ -298,6 +298,28 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     [],
   );
 
+  /** Sync mesh node offsets → Zustand store for the pixel grading pipeline.
+   *  Converts pixel offsets into store-compatible CLGridNode format:
+   *  offsetX = chroma shift (%), offsetY = luminance shift (%). */
+  const syncToStore = useCallback(() => {
+    const ns = nodesRef.current;
+    const { w, h } = sizeRef.current;
+    if (w < 1 || h < 1) return;
+    const { circleR } = getCircleGeom(w, h);
+    if (circleR < 1) return;
+
+    const storeNodes = ns.map((n) => ({
+      id: n.id,
+      chroma: n.chroma,
+      luminance: n.luminance,
+      // Pixel offset → colour-space offset (scale relative to circle radius)
+      offsetX: Math.round((n.offsetX / circleR) * 1000) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 1000) / 10,
+    }));
+
+    useAppStore.getState().setCLNodes(storeNodes);
+  }, [getCircleGeom]);
+
   // ─── Render background (circular C/L gradient) ─────────────────────────
   const renderBackground = useCallback(
     (w: number, h: number) => {
@@ -604,6 +626,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
           setCanvasSize({ w, h });
           renderBackground(w, h);
           updateNodesForSize(w, h, nodesRef.current.length > 0);
+          syncToStore();
           setCanvasReady(true);
           scheduleDraw();
         }
@@ -749,6 +772,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
 
         if (draggedNode) {
           applyDragDelta(draggedNode, deltaX, deltaY, info.startOffsets);
+          syncToStore();
           scheduleDraw();
 
           setTooltip({
@@ -795,6 +819,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     if (isDraggingRef.current) {
       isDraggingRef.current = false;
       dragInfoRef.current = null;
+      syncToStore();
       overlayCanvasRef.current?.style.setProperty('cursor', 'grab');
       scheduleDraw();
     }
@@ -817,6 +842,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
           }
         }
         scheduleDraw();
+        syncToStore();
 
         setTooltip({
           x,

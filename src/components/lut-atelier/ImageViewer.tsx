@@ -16,6 +16,7 @@ import {
   ImagePlus,
 } from 'lucide-react';
 import { useAppStore, type CompareMode, type LUTItem, type ImageInfo } from '@/store/useAppStore';
+import { processImagePixels, type ColorGradeParams } from '@/lib/lut-engine';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -258,6 +259,11 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     settings,
   } = useAppStore();
 
+  const curveData = useAppStore((s) => s.curveData);
+  const channelData = useAppStore((s) => s.channelData);
+  const abNodes = useAppStore((s) => s.abNodes);
+  const clNodes = useAppStore((s) => s.clNodes);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const splitLineRef = useRef<HTMLDivElement>(null);
@@ -267,6 +273,99 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const [zoomLevel, setZoomLevel] = useState(100); // always a number, 100 = actual pixels
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
+
+  /* ----- Graded Image (canvas-based pixel processing) ----- */
+  const [gradedUrl, setGradedUrl] = useState<string | null>(null);
+  const gradedBlobRef = useRef<string | null>(null);
+
+  // Check if any manual adjustments have been made
+  const hasAdjustments = useMemo(() => {
+    if (!abNodes || !clNodes) return false;
+    return abNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0) ||
+      clNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0) ||
+      Object.values(channelData).some(
+        (ch) => ch.enabled && (ch.gain !== 0 || ch.gamma !== 1 || ch.lift !== 0 || ch.offset !== 0),
+      );
+  }, [abNodes, clNodes, channelData]);
+
+  // Process image through the grading pipeline when params change
+  useEffect(() => {
+    if (!currentImage || !hasAdjustments) {
+      if (gradedBlobRef.current) {
+        URL.revokeObjectURL(gradedBlobRef.current);
+        gradedBlobRef.current = null;
+      }
+      // Defer state clear to avoid synchronous setState in effect
+      queueMicrotask(() => setGradedUrl(null));
+      return;
+    }
+
+    let cancelled = false;
+
+    const img = new Image();
+    img.onload = () => {
+      if (cancelled) return;
+
+      // Limit preview size for performance (max 1200px on longest edge)
+      const maxDim = 1200;
+      const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const imageData = ctx.getImageData(0, 0, w, h);
+
+      // Build ColorGradeParams from store values
+      const params: ColorGradeParams = {
+        curveData: curveData.map((c) => ({
+          channel: c.channel,
+          type: c.type,
+          points: c.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
+          isLocked: c.isLocked,
+        })),
+        channelData: JSON.parse(JSON.stringify(channelData)),
+        abNodes: abNodes.filter((n) => n.offsetX !== 0 || n.offsetY !== 0),
+        clNodes: clNodes.filter((n) => n.offsetX !== 0 || n.offsetY !== 0),
+        globalIntensity,
+      };
+
+      processImagePixels(imageData.data, w, h, params);
+      ctx.putImageData(imageData, 0, 0);
+
+      canvas.toBlob(
+        (blob) => {
+          if (cancelled || !blob) return;
+          if (gradedBlobRef.current) {
+            URL.revokeObjectURL(gradedBlobRef.current);
+          }
+          const url = URL.createObjectURL(blob);
+          gradedBlobRef.current = url;
+          setGradedUrl(url);
+        },
+        'image/jpeg',
+        0.92,
+      );
+    };
+    img.src = currentImage.dataUrl;
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentImage?.dataUrl, hasAdjustments, curveData, channelData, abNodes, clNodes, globalIntensity]);
+
+  // Cleanup blob URL on unmount
+  useEffect(() => {
+    return () => {
+      if (gradedBlobRef.current) {
+        URL.revokeObjectURL(gradedBlobRef.current);
+      }
+    };
+  }, []);
 
   /* ----- Observe container size ----- */
   useEffect(() => {
@@ -522,6 +621,10 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   const img = currentImage!;
 
+  // The pixel-processed graded image (or original if no manual adjustments)
+  const gradedSrc = gradedUrl || img.dataUrl;
+  const effectiveSrc = isBefore ? img.dataUrl : gradedSrc;
+
   // CSS for the image element: always explicit pixel dimensions
   const imgStyle: React.CSSProperties = {
     width: displayDims.w,
@@ -635,7 +738,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             {compareMode === 'off' && (
               <div style={{ position: 'relative', display: 'inline-block' }}>
                 <img
-                  src={img.dataUrl}
+                  src={effectiveSrc}
                   alt={img.name}
                   draggable={false}
                   style={imgStyle}
@@ -690,13 +793,13 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   }}
                 >
                   <img
-                    src={img.dataUrl}
+                    src={gradedSrc}
                     alt={img.name}
                     draggable={false}
                     style={{
                       width: displayDims.w,
                       height: displayDims.h,
-                      filter: effectiveFilter !== 'none' ? effectiveFilter : undefined,
+                      filter: gradedFilter !== 'none' ? gradedFilter : undefined,
                       transition: 'filter 0.3s ease',
                       userSelect: 'none',
                       objectFit: 'fill',
@@ -759,7 +862,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                 <div style={{ position: 'relative', flexShrink: 0, width: (displayDims.w - 12) / 2 }}>
                   <ImageLabel text="Graded" side="right" />
                   <img
-                    src={img.dataUrl}
+                    src={gradedSrc}
                     alt={img.name}
                     draggable={false}
                     style={imgStyle}

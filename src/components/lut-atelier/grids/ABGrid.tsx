@@ -225,8 +225,34 @@ export default function ABGrid({ className = '' }: { className?: string }) {
   const [cssSize, setCssSize] = useState({ w: 0, h: 0 });
   const [tip, setTip] = useState<TooltipData | null>(null);
 
-  // ── Store (only the three values specified in the design) ────────────────
+  // ── Store ───────────────────────────────────────────────────────────────
   const setSelectedNodeId = useAppStore((s) => s.setSelectedNodeId);
+
+  /** Sync mesh node offsets → Zustand store for the pixel grading pipeline.
+   *  Converts polar canvas coords + pixel offsets into store-compatible
+   *  GridNode format: hue (0–360), saturation (0–100), offsetX (hue shift°),
+   *  offsetY (sat shift %). */
+  const syncToStore = useCallback(() => {
+    const ns = nodesRef.current;
+    const { w, h } = sizeRef.current;
+    if (w < 1 || h < 1) return;
+    const cx = w / 2;
+    const cy = h / 2;
+    const maxR = Math.min(cx, cy) * 0.95;
+    if (maxR < 1) return;
+
+    const storeNodes = ns.map((n) => ({
+      id: n.id,
+      hue: ((n.angleRad / TWO_PI) * 360 + 360) % 360,
+      saturation: Math.round(n.radiusFrac * 1000) / 10,
+      lightness: 50,
+      // Pixel offset → colour-space offset  (scale relative to circle radius)
+      offsetX: Math.round((n.offsetX / maxR) * 1800) / 10,
+      offsetY: Math.round(-(n.offsetY / maxR) * 1200) / 10,
+    }));
+
+    useAppStore.getState().setABNodes(storeNodes);
+  }, []);
 
   // ══════════════════════════════════════════════════════════════════════════
   // Background canvas — redrawn only on resize
@@ -494,6 +520,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
         // Redraw background at new size
         drawBg(w, h);
 
+        syncToStore();
+
         // Size the overlay canvas
         const ol = olRef.current;
         if (ol) {
@@ -541,6 +569,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
         draggingRef.current = false;
         dragIdxRef.current = -1;
         dragStartRef.current = null;
+        syncToStore();
         sched();
       }
     };
@@ -692,6 +721,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
           isDragging: true,
         });
 
+        syncToStore();
         sched();
       } else {
         // ── Hovering ────────────────────────────────────────────────────
@@ -728,6 +758,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       draggingRef.current = false;
       dragIdxRef.current = -1;
       dragStartRef.current = null;
+      syncToStore();
       olRef.current?.style.setProperty('cursor', 'grab');
     }
   }, []);
@@ -771,6 +802,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
         }
       }
 
+      syncToStore();
       sched();
     },
     [mouseXY, sched],
