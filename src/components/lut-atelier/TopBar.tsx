@@ -17,12 +17,12 @@ import {
   BookOpen,
   Spline,
   SlidersHorizontal,
-  Mask,
+  ShieldCheck,
   Bookmark,
   FolderOpen,
   Target,
   FileUp,
-  SaveImage,
+  Save,
   Palette,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -142,7 +142,7 @@ export default function TopBar() {
   const panelButtons: { id: AppStore['rightPanel']; icon: React.ElementType; label: string; shortcut?: string }[] = [
     { id: 'curves', icon: Spline, label: 'Curves Editor', shortcut: '⌘⇧C' },
     { id: 'channels', icon: SlidersHorizontal, label: 'Channels', shortcut: '⌘⇧H' },
-    { id: 'masks', icon: Mask, label: 'Masks', shortcut: '⌘⇧M' },
+    { id: 'masks', icon: ShieldCheck, label: 'Masks', shortcut: '⌘⇧M' },
     { id: 'lut-browser', icon: Layers, label: 'LUT Browser', shortcut: '⌘L' },
     { id: 'reference', icon: Sparkles, label: 'AI Reference Match', shortcut: '⌘R' },
     { id: 'look-manager', icon: Bookmark, label: 'Look Manager', shortcut: '⌘⇧B' },
@@ -197,7 +197,7 @@ export default function TopBar() {
               className="h-8 px-2 text-zinc-400 hover:text-white"
               onClick={handleSaveImage}
             >
-              <SaveImage className="w-4 h-4" />
+              <Save className="w-4 h-4" />
             </Button>
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-xs">Save Image</TooltipContent>
@@ -318,7 +318,7 @@ export default function TopBar() {
                 className="h-8 px-2 text-zinc-400 hover:text-white"
                 onClick={() => togglePanel('masks')}
               >
-                <Mask className="w-4 h-4" />
+                <ShieldCheck className="w-4 h-4" />
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom" className="text-xs">Masks</TooltipContent>

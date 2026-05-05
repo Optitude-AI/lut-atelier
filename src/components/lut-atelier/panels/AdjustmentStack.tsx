@@ -17,6 +17,10 @@ import {
   SlidersHorizontal,
   Layers,
   ChevronDown,
+  ShieldCheck,
+  Sliders,
+  FileUp,
+  Crosshair,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -115,6 +119,38 @@ const LAYER_TYPE_CONFIG: Record<AdjustmentType, LayerTypeConfig> = {
     accentText: 'text-sky-400',
     dropdownIcon: SlidersHorizontal,
   },
+  'channel': {
+    label: 'Channels',
+    icon: Sliders,
+    accentColor: 'border-l-pink-500',
+    accentBg: 'bg-pink-500/[0.06]',
+    accentText: 'text-pink-400',
+    dropdownIcon: Sliders,
+  },
+  'mask': {
+    label: 'Mask',
+    icon: ShieldCheck,
+    accentColor: 'border-l-teal-500',
+    accentBg: 'bg-teal-500/[0.06]',
+    accentText: 'text-teal-400',
+    dropdownIcon: ShieldCheck,
+  },
+  'lut-import': {
+    label: 'LUT Import',
+    icon: FileUp,
+    accentColor: 'border-l-indigo-500',
+    accentBg: 'bg-indigo-500/[0.06]',
+    accentText: 'text-indigo-400',
+    dropdownIcon: FileUp,
+  },
+  'color-target': {
+    label: 'Color Target',
+    icon: Crosshair,
+    accentColor: 'border-l-yellow-500',
+    accentBg: 'bg-yellow-500/[0.06]',
+    accentText: 'text-yellow-400',
+    dropdownIcon: Crosshair,
+  },
 };
 
 // Dropdown menu items (ordered)
@@ -126,6 +162,10 @@ const ADDABLE_TYPES: AdjustmentType[] = [
   'selective-color',
   'hue-sat',
   'levels',
+  'channel',
+  'mask',
+  'lut-import',
+  'color-target',
 ];
 
 // ── Inline Edit Name ───────────────────────────────────────────────────────
@@ -505,6 +545,10 @@ export default function AdjustmentStack({ className }: AdjustmentStackProps) {
     'selective-color': 0,
     'hue-sat': 0,
     'levels': 0,
+    'channel': 0,
+    'mask': 0,
+    'lut-import': 0,
+    'color-target': 0,
   });
 
   // Sync counters from existing stack on mount
@@ -517,6 +561,10 @@ export default function AdjustmentStack({ className }: AdjustmentStackProps) {
       'selective-color': 0,
       'hue-sat': 0,
       'levels': 0,
+      'channel': 0,
+      'mask': 0,
+      'lut-import': 0,
+      'color-target': 0,
     };
     for (const layer of adjustmentStack) {
       counters[layer.type]++;

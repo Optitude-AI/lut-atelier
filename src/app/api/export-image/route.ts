@@ -190,7 +190,7 @@ export async function POST(request: NextRequest) {
     const contentType = mimeTypes[format] || 'image/png';
 
     // Return as downloadable image
-    return new NextResponse(outputBuffer, {
+    return new NextResponse(new Uint8Array(outputBuffer), {
       status: 200,
       headers: {
         'Content-Type': contentType,

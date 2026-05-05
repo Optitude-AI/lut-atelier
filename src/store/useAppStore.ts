@@ -285,7 +285,7 @@ export interface AppStore {
   updateSettings: (settings: Partial<AppSettings>) => void;
 
   // UI state
-  rightPanel: 'lut-browser' | 'reference' | 'adjustments' | 'export' | 'integrations' | 'curves' | 'channels' | 'masks' | 'look-manager' | 'batch' | 'color-targets' | 'lut-import' | null;
+  rightPanel: 'lut-browser' | 'reference' | 'adjustments' | 'export' | 'integrations' | 'curves' | 'channels' | 'masks' | 'look-manager' | 'batch' | 'color-targets' | 'lut-import' | 'color-space' | null;
   setRightPanel: (panel: AppStore['rightPanel']) => void;
   leftPanel: 'tools' | 'adjustments' | 'history' | null;
   setLeftPanel: (panel: AppStore['leftPanel']) => void;

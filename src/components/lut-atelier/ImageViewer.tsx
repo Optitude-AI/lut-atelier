@@ -304,7 +304,7 @@ function GradedImage({
         transition: 'filter 0.3s ease',
         objectFit: 'contain',
         userSelect: 'none',
-        WebkitUserDrag: 'none',
+        ...({ WebkitUserDrag: 'none' } as React.CSSProperties),
       }}
     />
   );
@@ -628,7 +628,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                     maxHeight: containerSize.h > 0 ? containerSize.h - 100 : undefined,
                     marginLeft: `-${splitPosition}%`,
                     width: `${100 / (100 - splitPosition) * 100}%`,
-                    maxWidth: 'none',
                   }}
                 />
               </div>

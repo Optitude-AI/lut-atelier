@@ -563,7 +563,7 @@ export default function LookManager({ className }: LookManagerProps) {
 
       // Restore channels
       if (look.data.channels) {
-        const channels = look.data.channels as Record<
+        const channels = look.data.channels as unknown as Record<
           string,
           {
             enabled: boolean;
@@ -693,7 +693,7 @@ export default function LookManager({ className }: LookManagerProps) {
           const now = new Date().toISOString();
           const validLooks = imported
             .filter(
-              (l: Record<string, unknown>) =>
+              (l: SavedLook) =>
                 l.id &&
                 l.name &&
                 l.data &&
