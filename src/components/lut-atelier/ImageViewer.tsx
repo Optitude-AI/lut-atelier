@@ -525,17 +525,20 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const zoomIn = useCallback(() => {
     setZoomLevel(prev => {
       const current = prev === 0 ? fitZoomPercent : prev;
-      return Math.min(current + 25, 800);
+      // Adaptive step: finer steps at low zoom, larger steps at high zoom
+      const step = current >= 200 ? 25 : current >= 50 ? 10 : current >= 20 ? 5 : 2;
+      return Math.min(current + step, 800);
     });
   }, [fitZoomPercent]);
 
   const zoomOut = useCallback(() => {
     setZoomLevel(prev => {
       const current = prev === 0 ? fitZoomPercent : prev;
-      if (current - 25 <= fitZoomPercent) return 0;
-      return Math.max(current - 25, 5);
+      // Adaptive step: larger steps at high zoom, finer steps at low zoom
+      const step = current > 200 ? 25 : current > 50 ? 10 : current > 20 ? 5 : 2;
+      return Math.max(current - step, 5);
     });
-  }, [fitZoomPercent]);
+  }, []);
 
   const cycleZoom = useCallback(() => {
     setZoomLevel(prev => {
@@ -547,6 +550,11 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     });
   }, [fitZoomPercent]);
 
+  // Direct zoom setter for the input field
+  const handleZoomInput = useCallback((value: number) => {
+    setZoomLevel(Math.max(5, Math.min(800, value)));
+  }, []);
+
   /* ----- Scroll-wheel zoom ----- */
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -555,16 +563,20 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
         e.stopPropagation();
-        if (e.deltaY < 0) {
-          zoomIn();
-        } else {
-          zoomOut();
-        }
+        setZoomLevel(prev => {
+          const current = prev === 0 ? fitZoomPercent : prev;
+          const step = current > 200 ? 25 : current > 50 ? 10 : current > 20 ? 5 : 2;
+          if (e.deltaY < 0) {
+            return Math.min(current + step, 800);
+          } else {
+            return Math.max(current - step, 5);
+          }
+        });
       }
     };
     el.addEventListener('wheel', handleWheel, { passive: false, capture: true });
     return () => el.removeEventListener('wheel', handleWheel, { capture: true });
-  }, [zoomIn, zoomOut]);
+  }, [fitZoomPercent]);
 
   /* ----- Image load handler ----- */
 
@@ -1044,23 +1056,57 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipContent>
           </Tooltip>
 
-          {/* Zoom percentage / Fit button */}
+          {/* Zoom percentage input */}
           <Tooltip>
             <TooltipTrigger asChild>
-              <button
-                className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-lg px-2 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
-                onClick={cycleZoom}
-                aria-label="Cycle zoom level"
-              >
+              <div className="relative flex items-center">
                 {isFitMode ? (
-                  <Maximize2 className="h-4 w-4" />
+                  <button
+                    className="flex h-9 min-w-[3.5rem] items-center justify-center rounded-lg px-2 text-[11px] font-medium tabular-nums text-white/60 transition-all hover:bg-white/10 hover:text-white/90 active:scale-95"
+                    onClick={cycleZoom}
+                    aria-label="Cycle zoom level"
+                  >
+                    <Maximize2 className="h-4 w-4" />
+                  </button>
                 ) : (
-                  <span>{effectiveZoom}%</span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={`${effectiveZoom}%`}
+                    onChange={(e) => {
+                      const raw = e.target.value.replace('%', '').trim();
+                      const val = parseInt(raw, 10);
+                      if (!isNaN(val) && val >= 5 && val <= 800) {
+                        setZoomLevel(val);
+                      }
+                    }}
+                    onFocus={(e) => {
+                      e.target.select();
+                    }}
+                    onBlur={(e) => {
+                      const raw = e.target.value.replace('%', '').trim();
+                      const val = parseInt(raw, 10);
+                      if (isNaN(val) || val < 5) setZoomLevel(5);
+                      else if (val > 800) setZoomLevel(800);
+                      else setZoomLevel(val);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        (e.target as HTMLInputElement).blur();
+                      } else if (e.key === 'Escape') {
+                        (e.target as HTMLInputElement).blur();
+                      }
+                    }}
+                    className="h-9 w-[4.5rem] rounded-lg border border-white/[0.08] bg-white/[0.05] px-2 text-center text-[11px] font-medium tabular-nums text-white/70 outline-none transition-all focus:border-amber-500/40 focus:bg-white/[0.08] focus:text-white/90"
+                    aria-label="Zoom percentage — type to set"
+                  />
                 )}
-              </button>
+              </div>
             </TooltipTrigger>
             <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
-              {isFitMode ? `Fit to view (${fitZoomPercent}%) — Click to set 100%` : `Zoom: ${effectiveZoom}% — Click to cycle`}
+              {isFitMode
+                ? `Fit to view (${fitZoomPercent}%) — Click to set 100%`
+                : `Type zoom (5–800%). Scroll with Ctrl`}
             </TooltipContent>
           </Tooltip>
 
