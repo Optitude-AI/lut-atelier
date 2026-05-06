@@ -334,11 +334,8 @@ export function interpolateABGrid(
     // Saturation distance
     const satDist = Math.abs(s - node.saturation);
 
-    // Lightness distance
-    const lumDist = Math.abs(l - node.lightness);
-
-    // Combined distance
-    const dist = Math.sqrt(hueDist * hueDist + satDist * satDist + lumDist * lumDist);
+    // Combined distance — hue + saturation ONLY (no lightness, since this is a hue/sat grid)
+    const dist = Math.sqrt(hueDist * hueDist + satDist * satDist);
 
     // Inverse distance weight with minimum distance to avoid division by zero
     const sigma = 50; // Wider spread for smoother, more gradual color transitions
@@ -383,7 +380,7 @@ export function interpolateCLGrid(
     // Luminance distance
     const lumDist = Math.abs(l - node.luminance);
 
-    // Combined distance
+    // Combined distance — chroma + luminance (correct for C/L grid)
     const dist = Math.sqrt(chromaDist * chromaDist + lumDist * lumDist);
 
     // Inverse distance weight with Gaussian falloff
@@ -1026,10 +1023,9 @@ export function processImagePixelsFast(
             const satDist = sPct - abSats[n];
             const absSatDist = satDist < 0 ? -satDist : satDist;
 
-            const lumDist = lPct - abLums[n];
-            const absLumDist = lumDist < 0 ? -lumDist : lumDist;
-
-            const distSq = hueDist * hueDist + absSatDist * absSatDist + absLumDist * absLumDist;
+            // Distance: hue + saturation ONLY — no lightness term
+            // (this is a hue/saturation grid, not a contrast/lightness grid)
+            const distSq = hueDist * hueDist + absSatDist * absSatDist;
             const weight = Math.exp(-distSq * AB_INV_2SIGMA2);
 
             totalWeight += weight;
@@ -1216,3 +1212,4 @@ export function processImagePixelsFast(
   }
 }
 // trigger
+
