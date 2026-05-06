@@ -53,14 +53,14 @@ interface TooltipData {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const NODE_RADIUS = 5;
-const CENTER_NODE_RADIUS = 8;
-const NODE_HIT_RADIUS = 12;
-const CENTER_HIT_RADIUS = 16;
-const RING_RADIUS_FRACS = [0, 0.24, 0.50, 0.78];
+const NODE_RADIUS = 4.5;
+const CENTER_NODE_RADIUS = 7;
+const NODE_HIT_RADIUS = 11;
+const CENTER_HIT_RADIUS = 14;
+const RING_RADIUS_FRACS = [0, 0.22, 0.44, 0.70, 1.0];
 const NUM_SPOKES = 8;
-const FALLOFF_SIGMA = 1.5;
-const MAX_DRAG_FRACTION = 0.15;
+const FALLOFF_SIGMA = 1.8;
+const MAX_DRAG_FRACTION = 0.18;
 const CL_BG_HUE = 30;
 const DEG = Math.PI / 180;
 const TWO_PI = Math.PI * 2;
@@ -93,17 +93,19 @@ function gaussFalloff(distance: number, sigma: number): number {
   return Math.exp(-(distance * distance) / (2 * sigma * sigma));
 }
 
-/** Index helpers for the flat 25-node array:
+/** Index helpers for the flat 33-node array:
  *  0          = center
  *  1..8       = Ring 1 (R1[0]..R1[7])
  *  9..16      = Ring 2 (R2[0]..R2[7])
  *  17..24     = Ring 3 (R3[0]..R3[7])
+ *  25..32     = Ring 4 (R4[0]..R4[7])
  */
 const R1 = (i: number) => 1 + i;
 const R2 = (i: number) => 9 + i;
 const R3 = (i: number) => 17 + i;
+const R4 = (i: number) => 25 + i;
 
-/** Generate all 25 nodes */
+/** Generate all 33 nodes (center + 4 rings × 8) */
 function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
   const nodes: CLMeshNode[] = [];
 
@@ -194,6 +196,29 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
     });
   }
 
+  // Ring 4 — 8 nodes at 22.5°, 67.5°, …, 337.5° (offset by 22.5°)
+  for (let i = 0; i < NUM_SPOKES; i++) {
+    const angle = (i * 45 + 22.5) * DEG;
+    const rFrac = RING_RADIUS_FRACS[4];
+    const { x, y } = polarToCanvas(angle, rFrac, cx, cy, circleR);
+    nodes.push({
+      id: `cl-r4-${i}`,
+      ring: 4,
+      index: i,
+      branch: i,
+      homeAngle: angle,
+      homeRadiusFrac: rFrac,
+      homeX: x,
+      homeY: y,
+      currentX: x,
+      currentY: y,
+      offsetX: 0,
+      offsetY: 0,
+      chroma: rFrac * 100,
+      luminance: (angle / TWO_PI) * 100,
+    });
+  }
+
   return nodes;
 }
 
@@ -218,14 +243,21 @@ function buildConnections(): Connection[] {
     c.push({ fromIdx: R2(i), toIdx: R3((i + 1) % NUM_SPOKES) });
   }
 
-  // Circumferential — Ring 1, Ring 2, Ring 3
+  // Ring 3[i] → Ring 4[i]  AND  Ring 3[i] → Ring 4[(i+1)%8]
+  for (let i = 0; i < NUM_SPOKES; i++) {
+    c.push({ fromIdx: R3(i), toIdx: R4(i) });
+    c.push({ fromIdx: R3(i), toIdx: R4((i + 1) % NUM_SPOKES) });
+  }
+
+  // Circumferential — Ring 1, Ring 2, Ring 3, Ring 4
   for (let i = 0; i < NUM_SPOKES; i++) {
     c.push({ fromIdx: R1(i), toIdx: R1((i + 1) % NUM_SPOKES) });
     c.push({ fromIdx: R2(i), toIdx: R2((i + 1) % NUM_SPOKES) });
     c.push({ fromIdx: R3(i), toIdx: R3((i + 1) % NUM_SPOKES) });
+    c.push({ fromIdx: R4(i), toIdx: R4((i + 1) % NUM_SPOKES) });
   }
 
-  return c; // 8 + 16 + 16 + 24 = 64
+  return c; // 8 + 16 + 16 + 16 + 32 = 88
 }
 
 /** Build triangular cells for mesh fill (40 triangles) */
@@ -249,7 +281,13 @@ function buildTriCells(): TriCell[] {
     cells.push({ a: R2(i), b: R3((i + 1) % NUM_SPOKES), c: R2((i + 1) % NUM_SPOKES) });
   }
 
-  return cells; // 8 + 16 + 16 = 40
+  // Ring 3 → Ring 4
+  for (let i = 0; i < NUM_SPOKES; i++) {
+    cells.push({ a: R3(i), b: R4(i), c: R4((i + 1) % NUM_SPOKES) });
+    cells.push({ a: R3(i), b: R4((i + 1) % NUM_SPOKES), c: R3((i + 1) % NUM_SPOKES) });
+  }
+
+  return cells; // 8 + 16 + 16 + 16 = 56
 }
 
 // Pre-computed static topology
@@ -873,10 +911,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     overlayCanvasRef.current?.style.setProperty('cursor', 'default');
   }, [scheduleDraw]);
 
-  /** Throttled version of syncToStore — fires at most every 60ms during drag. */
+  /** Throttled version of syncToStore — fires at most every 16ms (~60fps) during drag. */
   const throttledSync = useCallback(() => {
     const now = performance.now();
-    if (now - lastSyncRef.current < 60) return;
+    if (now - lastSyncRef.current < 16) return;
     lastSyncRef.current = now;
     syncToStore();
   }, [syncToStore]);

@@ -437,13 +437,13 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       return;
     }
 
-    // Debounce: 80ms to batch rapid parameter changes
+    // Debounce: 30ms to batch rapid parameter changes (fast enough for smooth dragging)
     clearTimeout(processingTimerRef.current);
     processingTimerRef.current = window.setTimeout(() => {
       requestAnimationFrame(() => {
         processGradedImage();
       });
-    }, 80);
+    }, 30);
 
     return () => {
       clearTimeout(processingTimerRef.current);

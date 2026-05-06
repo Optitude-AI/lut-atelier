@@ -341,7 +341,7 @@ export function interpolateABGrid(
     const dist = Math.sqrt(hueDist * hueDist + satDist * satDist + lumDist * lumDist);
 
     // Inverse distance weight with minimum distance to avoid division by zero
-    const sigma = 30; // Spread factor for weighting
+    const sigma = 50; // Wider spread for smoother, more gradual color transitions
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -387,7 +387,7 @@ export function interpolateCLGrid(
     const dist = Math.sqrt(chromaDist * chromaDist + lumDist * lumDist);
 
     // Inverse distance weight with Gaussian falloff
-    const sigma = 25;
+    const sigma = 45; // Wider spread for smoother, more gradual transitions
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -860,9 +860,9 @@ export function processImagePixelsFast(
   const clOffY = clData.offsetYs;
   const clCount = clData.count;
 
-  // Pre-compute 1/(2*sigma^2) for AB and CL grids
-  const AB_INV_2SIGMA2 = 1 / (2 * 30 * 30); // sigma = 30
-  const CL_INV_2SIGMA2 = 1 / (2 * 25 * 25); // sigma = 25
+  // Pre-compute 1/(2*sigma^2) for AB and CL grids (wider sigma = smoother transitions)
+  const AB_INV_2SIGMA2 = 1 / (2 * 50 * 50); // sigma = 50
+  const CL_INV_2SIGMA2 = 1 / (2 * 45 * 45); // sigma = 45
 
   // Check if LUTs are identity (avoid unnecessary work)
   const hasMasterCurve = masterLUT !== rLUT; // heuristic: if they differ, master was custom-built
@@ -1215,3 +1215,4 @@ export function processImagePixelsFast(
     pixels[i + 2] = outB;
   }
 }
+// trigger

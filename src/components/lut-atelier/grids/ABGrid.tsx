@@ -34,17 +34,17 @@ interface TooltipData {
 // Constants
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const NODE_RADIUS = 5;
-const CENTER_RADIUS = 8;
-const HIT_RADIUS = 14;
-const MAX_DRAG_FRAC = 0.15;
-const SIGMA = 1.5;
+const NODE_RADIUS = 4.5;
+const CENTER_RADIUS = 7;
+const HIT_RADIUS = 13;
+const MAX_DRAG_FRAC = 0.18;
+const SIGMA = 1.8;
 const TWO_PI = Math.PI * 2;
 const INV_TWO_PI = 1 / TWO_PI;
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Mesh topology — computed once at module level (25 nodes, 64 connections,
-// 40 fill triangles)
+// Mesh topology — 33 nodes (center + 4 rings × 8), 96 connections,
+// 56 fill triangles. Ring 4 extends to 1.0 radius for full color coverage.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const INITIAL_NODES: MeshNode[] = (() => {
@@ -54,27 +54,35 @@ const INITIAL_NODES: MeshNode[] = (() => {
     id: 'ab-c', ring: 0, index: 0, branch: -1,
     angleRad: 0, radiusFrac: 0, offsetX: 0, offsetY: 0,
   });
-  // Ring 1 — 8 nodes at 0.24 radius, 0°/45°/…/315°
+  // Ring 1 — 8 nodes at 0.22 radius
   for (let i = 0; i < 8; i++) {
     out.push({
       id: `ab-1-${i}`, ring: 1, index: i, branch: i,
-      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.24,
+      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.22,
       offsetX: 0, offsetY: 0,
     });
   }
-  // Ring 2 — 8 nodes at 0.50 radius, offset by 22.5°
+  // Ring 2 — 8 nodes at 0.44 radius, offset by 22.5°
   for (let i = 0; i < 8; i++) {
     out.push({
       id: `ab-2-${i}`, ring: 2, index: i, branch: i,
-      angleRad: (i / 8) * TWO_PI + Math.PI / 8, radiusFrac: 0.50,
+      angleRad: (i / 8) * TWO_PI + Math.PI / 8, radiusFrac: 0.44,
       offsetX: 0, offsetY: 0,
     });
   }
-  // Ring 3 — 8 nodes at 0.78 radius, same angles as Ring 1
+  // Ring 3 — 8 nodes at 0.70 radius, same angles as Ring 1
   for (let i = 0; i < 8; i++) {
     out.push({
       id: `ab-3-${i}`, ring: 3, index: i, branch: i,
-      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.78,
+      angleRad: (i / 8) * TWO_PI, radiusFrac: 0.70,
+      offsetX: 0, offsetY: 0,
+    });
+  }
+  // Ring 4 — 8 nodes at 1.0 radius (edge), offset by 22.5°
+  for (let i = 0; i < 8; i++) {
+    out.push({
+      id: `ab-4-${i}`, ring: 4, index: i, branch: i,
+      angleRad: (i / 8) * TWO_PI + Math.PI / 8, radiusFrac: 1.0,
       offsetX: 0, offsetY: 0,
     });
   }
@@ -83,11 +91,12 @@ const INITIAL_NODES: MeshNode[] = (() => {
 
 // Node-array index offsets
 const C = 0;    // center
-const R1 = 1;   // ring-1 start
-const R2 = 9;   // ring-2 start
-const R3 = 17;  // ring-3 start
+const R1 = 1;   // ring-1 start  (1..8)
+const R2 = 9;   // ring-2 start  (9..16)
+const R3 = 17;  // ring-3 start  (17..24)
+const R4 = 25;  // ring-4 start  (25..32)
 
-// ── 64 connections ─────────────────────────────────────────────────────────
+// ── 96 connections ─────────────────────────────────────────────────────────
 
 const CONNS: [number, number][] = [
   // center → ring-1  (8)
@@ -98,15 +107,20 @@ const CONNS: [number, number][] = [
   ...Array.from({ length: 8 }, (_, i) => [R2 + i, R2 + (i + 1) % 8] as [number, number]),
   // ring-3 circumferential  (8)
   ...Array.from({ length: 8 }, (_, i) => [R3 + i, R3 + (i + 1) % 8] as [number, number]),
+  // ring-4 circumferential  (8)
+  ...Array.from({ length: 8 }, (_, i) => [R4 + i, R4 + (i + 1) % 8] as [number, number]),
   // ring-1 → ring-2  (16)
   ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + i] as [number, number]),
   ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + (i + 7) % 8] as [number, number]),
   // ring-2 → ring-3  (16)
   ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i] as [number, number]),
   ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8] as [number, number]),
+  // ring-3 → ring-4  (16)
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + i] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + (i + 1) % 8] as [number, number]),
 ];
 
-// ── 40 fill triangles ──────────────────────────────────────────────────────
+// ── 56 fill triangles ──────────────────────────────────────────────────────
 
 const TRIS: [number, number, number][] = [
   // center → ring-1  (8 sectors)
@@ -117,6 +131,9 @@ const TRIS: [number, number, number][] = [
   // ring-2 → ring-3  (16 triangles)
   ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i, R3 + (i + 1) % 8] as [number, number]),
   ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8, R2 + (i + 1) % 8] as [number, number]),
+  // ring-3 → ring-4  (16 triangles)
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + i, R4 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + (i + 1) % 8, R3 + (i + 1) % 8] as [number, number]),
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -329,8 +346,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       ctx.stroke();
     }
 
-    // 4 concentric circles at ring boundaries
-    const radii = [0.24, 0.50, 0.78, 1.0];
+    // 5 concentric circles at ring boundaries
+    const radii = [0.22, 0.44, 0.70, 1.0];
     for (const rf of radii) {
       ctx.beginPath();
       ctx.arc(scx, scy, smr * rf, 0, TWO_PI);
@@ -560,10 +577,10 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     return unsub;
   }, [sched]);
 
-  /** Throttled version of syncToStore — fires at most every 60ms during drag. */
+  /** Throttled version of syncToStore — fires at most every 16ms (~60fps) during drag. */
   const throttledSync = useCallback(() => {
     const now = performance.now();
-    if (now - lastSyncRef.current < 60) return;
+    if (now - lastSyncRef.current < 16) return;
     lastSyncRef.current = now;
     syncToStore();
   }, [syncToStore]);
