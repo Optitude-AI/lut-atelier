@@ -502,3 +502,28 @@ Stage Summary:
 - Performance optimized with: curve LUTs (O(1)), typed array nodes, 80ms debounce, 60ms grid throttle, 800px preview, toDataURL
 - Expected ~5-10x speed improvement over original implementation
 - All features preserved: zoom, compare, before/after, split, side-by-side
+
+---
+Task ID: 13
+Agent: Main Orchestrator
+Task: Fix hydration error, contrast change, and add LUT None/switching capability
+
+Work Log:
+- Fixed hydration error: Added `suppressHydrationWarning` to `<body>` in layout.tsx
+- Fixed hydration error: Replaced `Math.random()` in sidebar.tsx SidebarMenuSkeleton with deterministic "70%" width
+- Fixed contrast issue: Reduced CLGrid luminance multiplier from 600/10=60% to 150/10=15% max
+- Fixed contrast issue: Reduced CLGrid chroma multiplier from 600/10=60% to 300/10=30% max
+- Added LUT "None / Original" option in LUT browser with prominent card at top of grid
+- Added active LUT indicator badge in ImageViewer with X dismiss button
+- Fixed setState-in-effect lint warnings: Replaced `setMounted(true)` effect with ref
+- Fixed setState-in-effect: Replaced `setZoomLevel(0)` effect with ref-based sync pattern
+- Fixed CLGrid `throttledSync` hoisting issue (moved before handleMouseMove)
+- Fixed CLGrid ref mutation in updateNodesForSize (replaced with immutable map)
+- Fixed zoomOut missing fitZoomPercent dependency
+- Fixed HomeScreen handleImportPhoto missing setActiveLutId dependency
+
+Stage Summary:
+- Hydration error resolved: deterministic skeleton width + body suppressHydrationWarning
+- CLGrid contrast changes dramatically reduced: luminance 60%→15%, chroma 60%→30%
+- LUT switching now easy: "None / Original" card at top of LUT browser, active LUT badge with X in image viewer
+- All lint errors resolved (0 errors, only 4 pre-existing warnings in ScopesPanel)

@@ -352,9 +352,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       chroma: n.chroma,
       luminance: n.luminance,
       // Pixel offset → colour-space offset (scale relative to circle radius)
-      // Moderate multipliers: full drag ≈ 60% chroma shift, 60% luminance shift
-      offsetX: Math.round((n.offsetX / circleR) * 600) / 10,
-      offsetY: Math.round(-(n.offsetY / circleR) * 600) / 10,
+      // Conservative multipliers: full drag ≈ 30% chroma shift, 15% luminance shift
+      // Luminance kept low to avoid unwanted contrast/brightness changes
+      offsetX: Math.round((n.offsetX / circleR) * 300) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 150) / 10,
     }));
 
     useAppStore.getState().setCLNodes(storeNodes);
@@ -453,15 +454,21 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       if (preserveOffsets && oldW > 0 && nodesRef.current.length > 0) {
         const oldGeom = getCircleGeom(oldW, sizeRef.current.h);
         const scale = circleR / oldGeom.circleR;
-        for (const node of nodesRef.current) {
-          node.offsetX *= scale;
-          node.offsetY *= scale;
+        // Rebuild nodes array to avoid direct ref mutation (React Compiler compat)
+        nodesRef.current = nodesRef.current.map((node) => {
+          const newOffX = node.offsetX * scale;
+          const newOffY = node.offsetY * scale;
           const pos = polarToCanvas(node.homeAngle, node.homeRadiusFrac, cx, cy, circleR);
-          node.homeX = pos.x;
-          node.homeY = pos.y;
-          node.currentX = pos.x + node.offsetX;
-          node.currentY = pos.y + node.offsetY;
-        }
+          return {
+            ...node,
+            offsetX: newOffX,
+            offsetY: newOffY,
+            homeX: pos.x,
+            homeY: pos.y,
+            currentX: pos.x + newOffX,
+            currentY: pos.y + newOffY,
+          };
+        });
       } else {
         nodesRef.current = generateNodes(cx, cy, circleR);
       }
@@ -799,6 +806,14 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     [findNodeAt, getCoords, setSelectedNodeId, getAffectedNodeIds],
   );
 
+  /** Throttled version of syncToStore — fires at most every 16ms (~60fps) during drag. */
+  const throttledSync = useCallback(() => {
+    const now = performance.now();
+    if (now - lastSyncRef.current < 16) return;
+    lastSyncRef.current = now;
+    syncToStore();
+  }, [syncToStore]);
+
   // ─── Mouse: Move ────────────────────────────────────────────────────────
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
@@ -911,14 +926,6 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     }
     overlayCanvasRef.current?.style.setProperty('cursor', 'default');
   }, [scheduleDraw]);
-
-  /** Throttled version of syncToStore — fires at most every 16ms (~60fps) during drag. */
-  const throttledSync = useCallback(() => {
-    const now = performance.now();
-    if (now - lastSyncRef.current < 16) return;
-    lastSyncRef.current = now;
-    syncToStore();
-  }, [syncToStore]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   return (

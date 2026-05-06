@@ -146,7 +146,7 @@ export default function HomeScreen() {
       }
     };
     input.click();
-  }, [setCurrentImage, setViewMode, toast]);
+  }, [setCurrentImage, setViewMode, setActiveLutId, toast]);
 
   const handleGuidedMode = (mode: string) => {
     setViewMode('workspace');

@@ -9,6 +9,7 @@ import {
   Star,
   X,
   Info,
+  Ban,
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -517,6 +518,11 @@ export default function LUTBrowser({ className }: LUTBrowserProps) {
     [lutItems, setActiveLutId, setLutIntensity],
   );
 
+  /** Deactivate the current LUT to show the original image. */
+  const handleDeactivateLut = useCallback(() => {
+    setActiveLutId(null);
+  }, [setActiveLutId]);
+
   const handleToggleFavorite = useCallback(
     (id: string) => {
       setLUTItems(
@@ -633,6 +639,63 @@ export default function LUTBrowser({ className }: LUTBrowserProps) {
 
       {/* ── Grid ────────────────────────────────────────────────────── */}
       <ScrollArea className="flex-1 px-4 pb-4">
+        {/* "None / Original" option — always visible */}
+        <div className="mb-3">
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+            onClick={handleDeactivateLut}
+            className={cn(
+              'flex items-center gap-3 rounded-xl px-4 py-3 cursor-pointer',
+              'border transition-all duration-200',
+              !activeLutId
+                ? 'bg-zinc-800/80 border-zinc-600/60 ring-1 ring-zinc-500/40'
+                : 'bg-zinc-900/50 border-zinc-800/60 hover:border-zinc-700 hover:bg-zinc-800/50',
+            )}
+          >
+            <div
+              className={cn(
+                'flex items-center justify-center w-9 h-9 rounded-lg flex-shrink-0 transition-colors',
+                !activeLutId
+                  ? 'bg-zinc-600/60'
+                  : 'bg-zinc-800',
+              )}
+            >
+              <Ban
+                size={18}
+                className={cn(
+                  'transition-colors',
+                  !activeLutId ? 'text-zinc-200' : 'text-zinc-500',
+                )}
+              />
+            </div>
+            <div className="flex flex-col min-w-0">
+              <span
+                className={cn(
+                  'text-sm font-medium truncate',
+                  !activeLutId ? 'text-zinc-100' : 'text-zinc-400',
+                )}
+              >
+                None / Original
+              </span>
+              <span className="text-[10px] text-zinc-500 truncate">
+                No preset filter applied
+              </span>
+            </div>
+            {!activeLutId && (
+              <div className="ml-auto flex items-center gap-1">
+                <Badge
+                  variant="secondary"
+                  className="text-[9px] px-1.5 py-0 bg-zinc-600/60 text-zinc-200 border-0"
+                >
+                  Active
+                </Badge>
+              </div>
+            )}
+          </motion.div>
+        </div>
+
         {filteredLUTs.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 pb-2">
             <AnimatePresence mode="popLayout">
