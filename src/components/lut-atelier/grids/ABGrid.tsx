@@ -208,6 +208,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
   const bgRef = useRef<HTMLCanvasElement>(null);
   const olRef = useRef<HTMLCanvasElement>(null);
   const rafRef = useRef(0);
+  const lastSyncRef = useRef(0);
 
   // ── Mutable interaction state (refs to avoid re-renders) ─────────────────
   const sizeRef = useRef({ w: 0, h: 0 });
@@ -559,6 +560,14 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     return unsub;
   }, [sched]);
 
+  /** Throttled version of syncToStore — fires at most every 60ms during drag. */
+  const throttledSync = useCallback(() => {
+    const now = performance.now();
+    if (now - lastSyncRef.current < 60) return;
+    lastSyncRef.current = now;
+    syncToStore();
+  }, [syncToStore]);
+
   // ══════════════════════════════════════════════════════════════════════════
   // Global mouseup — properly end drag even if pointer leaves the canvas
   // ══════════════════════════════════════════════════════════════════════════
@@ -721,7 +730,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
           isDragging: true,
         });
 
-        syncToStore();
+        throttledSync();
         sched();
       } else {
         // ── Hovering ────────────────────────────────────────────────────
@@ -750,7 +759,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
         sched();
       }
     },
-    [mouseXY, sched],
+    [mouseXY, sched, throttledSync],
   );
 
   const onUp = useCallback(() => {

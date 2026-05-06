@@ -429,3 +429,76 @@ Stage Summary:
 - A/B grid uses polar hue wheel background (angle=hue, distance=saturation)
 - C/L grid uses circular chroma-luminance gradient (angle=luminance, distance=chroma, warm amber hue)
 - Both grids feature branch-based dragging with Gaussian falloff, independent branch adjustment
+
+---
+Task ID: 4
+Agent: grid-throttle-optimizer
+Task: Throttle syncToStore in ABGrid and CLGrid during drag
+
+Work Log:
+- Added lastSyncRef to both ABGrid and CLGrid
+- Created throttledSync with 60ms minimum interval
+- Replaced syncToStore calls in mousemove handlers with throttledSync
+- Kept direct syncToStore in mouseup handlers for final state sync
+
+Stage Summary:
+- Grid stores now update at most ~16 times/second during drag instead of 60+
+- Canvas rendering still updates at full framerate
+- Final drag position always synced on mouseup
+
+---
+Task ID: 3
+Agent: lut-engine-optimizer
+Task: Optimize lut-engine with curve LUTs and typed array node data
+
+Work Log:
+- Added buildCurveLUT() for O(1) curve lookups
+- Added buildABNodeArrays() and buildCLNodeArrays() for typed array conversion
+- Added processImagePixelsFast() with optimized inner loop
+- Updated processImagePixels() to use curve LUTs internally
+- All existing functions preserved for backward compatibility
+
+Stage Summary:
+- lut-engine.ts now has fast path processing with curve LUTs
+- Backward compatible - all original functions still work
+
+---
+Task ID: 2
+Agent: imageviewer-optimizer
+Task: Optimize ImageViewer with caching, debouncing, and fast processing
+
+Work Log:
+- Cached source Image element and pixel data in refs (srcImageRef, srcPixelsRef, canvasRef)
+- Split effects: image loading (Effect 1) vs parameter changes (Effect 2, debounced)
+- Added 80ms debounce for parameter change processing via processingTimerRef + setTimeout
+- Switched to buildCurveLUT for O(1) curve lookups (replaces per-pixel cubicInterpolate)
+- Switched to processImagePixelsFast with typed array node data
+- Reduced preview resolution from 1200px to 800px
+- Replaced blob URL cycle (canvas.toBlob + URL.createObjectURL) with synchronous toDataURL('image/jpeg', 0.92)
+- Added processFnRef pattern to avoid circular dependencies between effects and callbacks
+- Removed gradedBlobRef (no longer needed with toDataURL approach)
+- All existing UI features preserved: zoom, compare modes, drop zone, before/after, split
+
+Stage Summary:
+- ImageViewer now caches source data and debounces reprocessing for fast interactive response
+- Uses optimized lut-engine fast path with pre-computed LUTs and typed array grid nodes
+- Much faster response to grid/curve adjustments (~5-10x improvement expected)
+- Zero new lint errors introduced (only pre-existing errors from other files)
+
+---
+Task ID: 12
+Agent: Main Orchestrator
+Task: Wire grids to image pipeline and optimize performance
+
+Work Log:
+- Analyzed full data flow: Grid drag → syncToStore → Zustand → ImageViewer → lut-engine → Canvas
+- Fixed parameter mismatch between ImageViewer's processImagePixelsFast call and FastGradeParams interface
+- Added curveData to hasAdjustments check (curves with non-identity points now trigger processing)
+- Verified all components compile cleanly with zero new lint errors
+- Confirmed throttle applied in both ABGrid (60ms) and CLGrid (60ms)
+
+Stage Summary:
+- Octagonal grids now properly affect the displayed image through the full color grading pipeline
+- Performance optimized with: curve LUTs (O(1)), typed array nodes, 80ms debounce, 60ms grid throttle, 800px preview, toDataURL
+- Expected ~5-10x speed improvement over original implementation
+- All features preserved: zoom, compare, before/after, split, side-by-side

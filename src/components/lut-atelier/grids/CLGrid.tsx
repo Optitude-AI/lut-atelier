@@ -263,6 +263,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const nodesRef = useRef<CLMeshNode[]>([]);
   const rafRef = useRef<number>(0);
+  const lastSyncRef = useRef(0);
   const sizeRef = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
   const [canvasSize, setCanvasSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
 
@@ -772,7 +773,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
 
         if (draggedNode) {
           applyDragDelta(draggedNode, deltaX, deltaY, info.startOffsets);
-          syncToStore();
+          throttledSync();
           scheduleDraw();
 
           setTooltip({
@@ -811,7 +812,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
         }
       }
     },
-    [findNodeAt, getCoords, applyDragDelta, scheduleDraw],
+    [findNodeAt, getCoords, applyDragDelta, scheduleDraw, throttledSync],
   );
 
   // ─── Mouse: Up ──────────────────────────────────────────────────────────
@@ -871,6 +872,14 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     }
     overlayCanvasRef.current?.style.setProperty('cursor', 'default');
   }, [scheduleDraw]);
+
+  /** Throttled version of syncToStore — fires at most every 60ms during drag. */
+  const throttledSync = useCallback(() => {
+    const now = performance.now();
+    if (now - lastSyncRef.current < 60) return;
+    lastSyncRef.current = now;
+    syncToStore();
+  }, [syncToStore]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   return (

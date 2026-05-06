@@ -16,7 +16,13 @@ import {
   ImagePlus,
 } from 'lucide-react';
 import { useAppStore, type CompareMode, type LUTItem, type ImageInfo } from '@/store/useAppStore';
-import { processImagePixels, type ColorGradeParams } from '@/lib/lut-engine';
+import {
+  processImagePixelsFast,
+  buildCurveLUT,
+  buildABNodeArrays,
+  buildCLNodeArrays,
+  type ColorGradeParams,
+} from '@/lib/lut-engine';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -276,96 +282,173 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   /* ----- Graded Image (canvas-based pixel processing) ----- */
   const [gradedUrl, setGradedUrl] = useState<string | null>(null);
-  const gradedBlobRef = useRef<string | null>(null);
+
+  /* ----- Cached source data for fast re-processing ----- */
+  const srcImageRef = useRef<HTMLImageElement | null>(null);
+  const srcPixelsRef = useRef<{ data: Uint8ClampedArray; width: number; height: number } | null>(null);
+  const processingTimerRef = useRef<number>(0);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const imageLoadedRef = useRef(false);
+  const processFnRef = useRef<() => void>(() => {});
 
   // Check if any manual adjustments have been made
   const hasAdjustments = useMemo(() => {
     if (!abNodes || !clNodes) return false;
-    return abNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0) ||
-      clNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0) ||
-      Object.values(channelData).some(
-        (ch) => ch.enabled && (ch.gain !== 0 || ch.gamma !== 1 || ch.lift !== 0 || ch.offset !== 0),
-      );
-  }, [abNodes, clNodes, channelData]);
+    // Check grid nodes
+    if (abNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0)) return true;
+    if (clNodes.some((n) => n.offsetX !== 0 || n.offsetY !== 0)) return true;
+    // Check channel adjustments
+    if (Object.values(channelData).some(
+      (ch) => ch.enabled && (ch.gain !== 0 || ch.gamma !== 1 || ch.lift !== 0 || ch.offset !== 0),
+    )) return true;
+    // Check curves (non-identity: any point where x !== y)
+    if (curveData.some((c) => !c.isLocked && c.points.some((p) => p.x !== p.y))) return true;
+    return false;
+  }, [abNodes, clNodes, channelData, curveData]);
 
-  // Process image through the grading pipeline when params change
+  /* ====================================================================== */
+  /*  Core processing function (uses cached source pixels)                   */
+  /* ====================================================================== */
+  const processGradedImage = useCallback(() => {
+    const src = srcPixelsRef.current;
+    if (!src) return;
+
+    let canvas = canvasRef.current;
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvasRef.current = canvas;
+    }
+    canvas.width = src.width;
+    canvas.height = src.height;
+    const ctx = canvas.getContext('2d')!;
+
+    // Copy source pixels into a working buffer
+    const imageData = new ImageData(new Uint8ClampedArray(src.data), src.width, src.height);
+
+    // Build pre-computed LUTs
+    const masterCurve = curveData.find(c => c.channel === 'master');
+    const lumCurve = curveData.find(c => c.channel === 'luminance');
+    const rCurve = curveData.find(c => c.channel === 'r');
+    const gCurve = curveData.find(c => c.channel === 'g');
+    const bCurve = curveData.find(c => c.channel === 'b');
+
+    const defaultPoints = [{ id: 'd0', x: 0, y: 0 }, { id: 'd1', x: 255, y: 255 }];
+
+    const masterLUT = buildCurveLUT(masterCurve?.points ?? defaultPoints);
+    const lumLUT = buildCurveLUT(lumCurve?.points ?? defaultPoints);
+    const rLUT = buildCurveLUT(rCurve?.points ?? defaultPoints);
+    const gLUT = buildCurveLUT(gCurve?.points ?? defaultPoints);
+    const bLUT = buildCurveLUT(bCurve?.points ?? defaultPoints);
+
+    // Build typed arrays for grid nodes
+    const abArrays = buildABNodeArrays(abNodes);
+    const clArrays = buildCLNodeArrays(clNodes);
+
+    // Process pixels using the fast path
+    processImagePixelsFast(imageData.data, src.width, src.height, {
+      masterLUT,
+      lumLUT,
+      rLUT,
+      gLUT,
+      bLUT,
+      channelData,
+      abNodes: abArrays,
+      clNodes: clArrays,
+      globalIntensity,
+    });
+
+    ctx.putImageData(imageData, 0, 0);
+
+    // Use toDataURL instead of blob URLs (synchronous, avoids blob overhead)
+    const url = canvas.toDataURL('image/jpeg', 0.92);
+    setGradedUrl(url);
+  }, [curveData, channelData, abNodes, clNodes, globalIntensity]);
+
+  // Keep ref in sync so image-load effect can call latest version
   useEffect(() => {
-    if (!currentImage || !hasAdjustments) {
-      if (gradedBlobRef.current) {
-        URL.revokeObjectURL(gradedBlobRef.current);
-        gradedBlobRef.current = null;
-      }
-      // Defer state clear to avoid synchronous setState in effect
+    processFnRef.current = processGradedImage;
+  }, [processGradedImage]);
+
+  /* ====================================================================== */
+  /*  Effect 1: Load & cache source image when dataUrl changes               */
+  /* ====================================================================== */
+  useEffect(() => {
+    if (!currentImage) {
+      srcImageRef.current = null;
+      srcPixelsRef.current = null;
+      imageLoadedRef.current = false;
       queueMicrotask(() => setGradedUrl(null));
       return;
     }
 
     let cancelled = false;
-
     const img = new Image();
     img.onload = () => {
       if (cancelled) return;
 
-      // Limit preview size for performance (max 1200px on longest edge)
-      const maxDim = 1200;
+      srcImageRef.current = img;
+
+      // Downsample for processing (800px max dimension)
+      const maxDim = 800;
       const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
 
-      const canvas = document.createElement('canvas');
+      // Create or reuse an offscreen canvas
+      let canvas = canvasRef.current;
+      if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvasRef.current = canvas;
+      }
       canvas.width = w;
       canvas.height = h;
       const ctx = canvas.getContext('2d')!;
       ctx.drawImage(img, 0, 0, w, h);
 
       const imageData = ctx.getImageData(0, 0, w, h);
-
-      // Build ColorGradeParams from store values
-      const params: ColorGradeParams = {
-        curveData: curveData.map((c) => ({
-          channel: c.channel,
-          type: c.type,
-          points: c.points.map((p) => ({ id: p.id, x: p.x, y: p.y })),
-          isLocked: c.isLocked,
-        })),
-        channelData: JSON.parse(JSON.stringify(channelData)),
-        abNodes: abNodes.filter((n) => n.offsetX !== 0 || n.offsetY !== 0),
-        clNodes: clNodes.filter((n) => n.offsetX !== 0 || n.offsetY !== 0),
-        globalIntensity,
+      srcPixelsRef.current = {
+        data: imageData.data,
+        width: w,
+        height: h,
       };
+      imageLoadedRef.current = true;
 
-      processImagePixels(imageData.data, w, h, params);
-      ctx.putImageData(imageData, 0, 0);
-
-      canvas.toBlob(
-        (blob) => {
-          if (cancelled || !blob) return;
-          if (gradedBlobRef.current) {
-            URL.revokeObjectURL(gradedBlobRef.current);
-          }
-          const url = URL.createObjectURL(blob);
-          gradedBlobRef.current = url;
-          setGradedUrl(url);
-        },
-        'image/jpeg',
-        0.92,
-      );
+      // Process immediately on first load (if adjustments exist)
+      if (hasAdjustments) {
+        processFnRef.current();
+      } else {
+        queueMicrotask(() => setGradedUrl(null));
+      }
     };
     img.src = currentImage.dataUrl;
 
     return () => {
       cancelled = true;
     };
-  }, [currentImage?.dataUrl, hasAdjustments, curveData, channelData, abNodes, clNodes, globalIntensity]);
+  }, [currentImage?.dataUrl, hasAdjustments]);
 
-  // Cleanup blob URL on unmount
+  /* ====================================================================== */
+  /*  Effect 2: Debounce re-processing when grading params change            */
+  /* ====================================================================== */
   useEffect(() => {
+    if (!currentImage || !imageLoadedRef.current || !hasAdjustments) {
+      clearTimeout(processingTimerRef.current);
+      queueMicrotask(() => setGradedUrl(null));
+      return;
+    }
+
+    // Debounce: 80ms to batch rapid parameter changes
+    clearTimeout(processingTimerRef.current);
+    processingTimerRef.current = window.setTimeout(() => {
+      requestAnimationFrame(() => {
+        processGradedImage();
+      });
+    }, 80);
+
     return () => {
-      if (gradedBlobRef.current) {
-        URL.revokeObjectURL(gradedBlobRef.current);
-      }
+      clearTimeout(processingTimerRef.current);
     };
-  }, []);
+  }, [currentImage?.dataUrl, hasAdjustments, curveData, channelData, abNodes, clNodes, globalIntensity, processGradedImage]);
 
   /* ----- Observe container size ----- */
   useEffect(() => {
