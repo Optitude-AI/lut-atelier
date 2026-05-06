@@ -14,6 +14,7 @@ import {
   GripVertical,
   Upload,
   ImagePlus,
+  Palette,
 } from 'lucide-react';
 import { useAppStore, type CompareMode, type LUTItem, type ImageInfo } from '@/store/useAppStore';
 import {
@@ -262,6 +263,9 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     globalIntensity,
     lutItems,
     activeLutId,
+    setActiveLutId,
+    lutIntensity,
+    setLutIntensity,
     settings,
   } = useAppStore();
 
@@ -277,6 +281,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   const [isBefore, setIsBefore] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(100); // always a number, 100 = actual pixels
+  const [mounted, setMounted] = useState(false);
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
 
@@ -452,6 +457,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
   /* ----- Observe container size ----- */
   useEffect(() => {
+    setMounted(true);
     const el = scrollContainerRef.current;
     if (!el) return;
     const observer = new ResizeObserver((entries) => {
@@ -486,8 +492,8 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const gradedFilter = useMemo(() => {
     if (!activeLut) return 'none';
     const base = CATEGORY_FILTERS[activeLut.category] ?? CATEGORY_FILTERS.warm;
-    return interpolateFilter(base, globalIntensity);
-  }, [activeLut, globalIntensity]);
+    return interpolateFilter(base, lutIntensity);
+  }, [activeLut, lutIntensity]);
 
   const colorSpaceInfo = COLOR_SPACE_CONFIG[settings.colorSpace];
   const hasImage = currentImage !== null;
@@ -1068,7 +1074,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                   >
                     <Maximize2 className="h-4 w-4" />
                   </button>
-                ) : (
+                ) : mounted ? (
                   <input
                     type="text"
                     inputMode="numeric"
@@ -1100,6 +1106,10 @@ export default function ImageViewer({ className }: ImageViewerProps) {
                     className="h-9 w-[4.5rem] rounded-lg border border-white/[0.08] bg-white/[0.05] px-2 text-center text-[11px] font-medium tabular-nums text-white/70 outline-none transition-all focus:border-amber-500/40 focus:bg-white/[0.08] focus:text-white/90"
                     aria-label="Zoom percentage — type to set"
                   />
+                ) : (
+                  <span className="flex h-9 min-w-[3.5rem] items-center justify-center text-[11px] font-medium tabular-nums text-white/60">
+                    {effectiveZoom}%
+                  </span>
                 )}
               </div>
             </TooltipTrigger>
@@ -1123,6 +1133,48 @@ export default function ImageViewer({ className }: ImageViewerProps) {
             </TooltipTrigger>
             <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
               Zoom in (Ctrl+Scroll)
+            </TooltipContent>
+          </Tooltip>
+
+          <div className="mx-1 h-5 w-px bg-white/[0.08]" />
+
+          {/* LUT preset toggle / cycle */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className={`flex h-9 items-center gap-1.5 rounded-lg px-2.5 transition-all active:scale-95 ${
+                  activeLut
+                    ? 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+                    : 'text-white/60 hover:bg-white/10 hover:text-white/90'
+                }`}
+                onClick={() => {
+                  if (activeLut) {
+                    setActiveLutId(null);
+                  } else if (lutItems.length > 0) {
+                    setActiveLutId(lutItems[0].id);
+                    setLutIntensity(lutItems[0].intensity);
+                  }
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (lutItems.length === 0) return;
+                  const currentIdx = activeLut ? lutItems.findIndex((l) => l.id === activeLutId) : -1;
+                  const nextIdx = (currentIdx + 1) % lutItems.length;
+                  setActiveLutId(lutItems[nextIdx].id);
+                  setLutIntensity(lutItems[nextIdx].intensity);
+                }}
+                aria-label={activeLut ? `LUT: ${activeLut.name} — Click to disable` : 'No LUT — Click to enable'}
+              >
+                <Palette className="h-[16px] w-[16px]" />
+                <span className="text-[10px] font-medium tracking-wide max-w-[80px] truncate">
+                  {activeLut ? activeLut.name : 'No LUT'}
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="border-white/10 bg-zinc-900 text-xs text-zinc-300">
+              {activeLut
+                ? `${activeLut.name} — Click off · Right-click cycle`
+                : 'Click to enable LUT · Right-click cycle'}
             </TooltipContent>
           </Tooltip>
 
@@ -1204,3 +1256,4 @@ function getMiniSwatchGradient(lut: LUTItem): string {
   };
   return hueMap[lut.category] ?? hueMap.warm;
 }
+

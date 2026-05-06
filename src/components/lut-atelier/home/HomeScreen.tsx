@@ -117,9 +117,8 @@ export default function HomeScreen() {
 
   const handleOpenDemo = () => {
     setViewMode('workspace');
-    if (lutItems.length > 0) {
-      setActiveLutId(lutItems[0].id);
-    }
+    // Don't auto-activate any LUT — start with clean/no-filter view
+    setActiveLutId(null);
   };
 
   const handleImportPhoto = useCallback(() => {
@@ -133,6 +132,7 @@ export default function HomeScreen() {
         const info = await readImageFile(file);
         setCurrentImage(info);
         setViewMode('workspace');
+        setActiveLutId(null); // Start with no LUT filter
         toast({
           title: 'Image imported',
           description: `${info.name} (${info.width}×${info.height})`,
