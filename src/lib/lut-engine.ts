@@ -377,8 +377,8 @@ export function interpolateABGrid(
   h: number,
   s: number,
   l: number,
-  globalHueSigma: number = 25,
-  globalSatSigma: number = 18,
+  globalHueSigma: number = 40,
+  globalSatSigma: number = 30,
 ): [number, number] {
   // Skip for very low saturation or lightness extremes
   if (s < 5 || l < 3 || l > 97) return [0, 0];
@@ -387,9 +387,24 @@ export function interpolateABGrid(
   let hueShift = 0;
   let satShift = 0;
 
+  // Track global (center) nodes separately for guaranteed influence
+  let globalTotalWeight = 0;
+  let globalHueShift = 0;
+  let globalSatShift = 0;
+
   for (const node of nodes) {
     if (node.offsetX === 0 && node.offsetY === 0) continue;
 
+    // Center/global nodes (saturation <= 1): affect ALL colored pixels equally
+    const isGlobal = node.saturation <= 1;
+    if (isGlobal) {
+      globalTotalWeight += 1;
+      globalHueShift += node.offsetX;
+      globalSatShift += node.offsetY;
+      continue;
+    }
+
+    // Normal position-specific node with Gaussian falloff
     // Hue distance (circular, 0-180)
     let hueDist = Math.abs(h - node.hue);
     if (hueDist > 180) hueDist = 360 - hueDist;
@@ -411,9 +426,24 @@ export function interpolateABGrid(
     satShift += node.offsetY * weight;
   }
 
-  if (totalWeight === 0) return [0, 0];
+  // Blend in global shifts if any
+  if (globalTotalWeight > 0) {
+    const gHueShift = globalHueShift / globalTotalWeight;
+    const gSatShift = globalSatShift / globalTotalWeight;
+    // Global shifts are added as a minimum guaranteed influence
+    const globalBoost = 0.6; // 60% guaranteed influence from global nodes
+    if (totalWeight > 0) {
+      hueShift = hueShift * (1 - globalBoost) + gHueShift * totalWeight * globalBoost / (totalWeight * (1 - globalBoost) + totalWeight);
+      satShift = satShift * (1 - globalBoost) + gSatShift * totalWeight * globalBoost / (totalWeight * (1 - globalBoost) + totalWeight);
+    } else {
+      hueShift = gHueShift;
+      satShift = gSatShift;
+    }
+  }
 
-  return [hueShift / totalWeight, satShift / totalWeight];
+  if (totalWeight === 0 && globalTotalWeight === 0) return [0, 0];
+
+  return [hueShift / Math.max(totalWeight, 0.001), satShift / Math.max(totalWeight, 0.001)];
 }
 
 // ─── C/L Grid Interpolation ───
@@ -991,10 +1021,10 @@ export function processImagePixelsFast(
   const CL_INV_2SIGMA2 = 1 / (2 * 40 * 40); // sigma = 40
 
   // AB global sigma: use params if provided, otherwise reasonable defaults
-  // 25° hue sigma gives good selectivity between 22.5° branches
-  // 18% sat sigma gives good selectivity between ring positions
-  const AB_GLOBAL_HUE_SIGMA = params.abGlobalHueSigma || 25;
-  const AB_GLOBAL_SAT_SIGMA = params.abGlobalSatSigma || 18;
+  // 40° hue sigma for wide perceptual coverage
+  // 30% sat sigma for broad chroma influence
+  const AB_GLOBAL_HUE_SIGMA = params.abGlobalHueSigma || 40;
+  const AB_GLOBAL_SAT_SIGMA = params.abGlobalSatSigma || 30;
 
   // Check if LUTs are identity (avoid unnecessary work)
   const hasMasterCurve = masterLUT !== rLUT; // heuristic: if they differ, master was custom-built

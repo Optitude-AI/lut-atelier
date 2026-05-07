@@ -4,6 +4,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useAppStore } from '@/store/useAppStore';
 import { oklabToRGB8 } from '@/lib/oklab';
+import { Undo2, Redo2, RotateCcw } from 'lucide-react';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -295,6 +296,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
   const lastSyncRef = useRef(0);
 
   // ── Mutable interaction state (refs to avoid re-renders) ─────────────────
+  const lastClickTimeRef = useRef(0);
   const sizeRef = useRef({ w: 0, h: 0 });
   const nodesRef = useRef<MeshNode[]>(INITIAL_NODES.map((n) => ({ ...n })));
   const draggingRef = useRef(false);
@@ -322,6 +324,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
   // ── React state (only for tooltip + CSS-size-dependent JSX) ─────────────
   const [cssSize, setCssSize] = useState({ w: 0, h: 0 });
   const [tip, setTip] = useState<TooltipData | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   // ── Store ───────────────────────────────────────────────────────────────
   const setSelectedNodeId = useAppStore((s) => s.setSelectedNodeId);
@@ -344,8 +348,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       hue: ((n.angleRad / TWO_PI) * 360 + 360) % 360,
       saturation: Math.round(n.radiusFrac * 1000) / 10,
       lightness: 50,
-      offsetX: Math.round((n.offsetX / maxR) * 500) / 10,
-      offsetY: Math.round(-(n.offsetY / maxR) * 250) / 10,
+      offsetX: Math.round((n.offsetX / maxR) * 1200) / 10,
+      offsetY: Math.round(-(n.offsetY / maxR) * 600) / 10,
       sigmaMult: n.sigmaMult,
       pinned: n.pinned,
       abHueSigma: 0,
@@ -394,6 +398,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       undoStackRef.current.shift();
     }
     redoStackRef.current = [];
+    setCanUndo(true);
+    setCanRedo(false);
   }, [takeSnapshot]);
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -864,6 +870,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     if (redoStackRef.current.length > MAX_UNDO) {
       redoStackRef.current.shift();
     }
+    setCanUndo(undoStackRef.current.length > 1);
+    setCanRedo(true);
     restoreSnapshot(snap);
   }, [takeSnapshot, restoreSnapshot]);
 
@@ -874,6 +882,8 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     if (undoStackRef.current.length > MAX_UNDO) {
       undoStackRef.current.shift();
     }
+    setCanUndo(true);
+    setCanRedo(redoStackRef.current.length > 1);
     restoreSnapshot(snap);
   }, [takeSnapshot, restoreSnapshot]);
 
@@ -976,8 +986,30 @@ export default function ABGrid({ className = '' }: { className?: string }) {
   // Pointer event handlers (Feature 2: replace mouse with pointer events)
   // ══════════════════════════════════════════════════════════════════════════
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // Reset All (with undo snapshot)
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const resetAll = useCallback(() => {
+    pushUndo();
+    const ns = nodesRef.current;
+    for (let i = 0; i < ns.length; i++) {
+      ns[i] = { ...ns[i], offsetX: 0, offsetY: 0 };
+    }
+    setCanUndo(undoStackRef.current.length > 1);
+    setCanRedo(false);
+    syncToStore();
+    schedFnRef.current();
+  }, [pushUndo, syncToStore]);
+
   const onPointerDown = useCallback(
     (e: React.PointerEvent) => {
+      // Debounce: ignore very quick clicks (likely part of double-click)
+      if (lastClickTimeRef.current && performance.now() - lastClickTimeRef.current < 350) {
+        return;
+      }
+      lastClickTimeRef.current = performance.now();
+
       // Feature 2: pointer capture for reliable tracking
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
@@ -1283,6 +1315,13 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       const idx = hitTest(nodesRef.current, cx, cy, mr, x, y);
       if (idx < 0) return;
 
+      // Cancel any ongoing drag to prevent interference
+      if (draggingRef.current) {
+        draggingRef.current = false;
+        dragIdxRef.current = -1;
+        dragStartRef.current = null;
+      }
+
       const ns = nodesRef.current;
       const n = ns[idx];
 
@@ -1368,12 +1407,30 @@ export default function ABGrid({ className = '' }: { className?: string }) {
             Hue / Saturation
           </span>
         </div>
-        <div className="flex items-center gap-3 text-[10px] text-white/25">
-          <span>Drag nodes to adjust</span>
-          <span className="text-white/10">|</span>
-          <span>Shift = hue, Ctrl = sat</span>
-          <span className="text-white/10">|</span>
-          <span>Right-click = pin</span>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="p-1 rounded hover:bg-white/10 disabled:opacity-20 disabled:pointer-events-none transition-colors"
+            title="Undo (Ctrl+Z)"
+          >
+            <Undo2 className="h-3.5 w-3.5 text-white/60" />
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="p-1 rounded hover:bg-white/10 disabled:opacity-20 disabled:pointer-events-none transition-colors"
+            title="Redo (Ctrl+Shift+Z)"
+          >
+            <Redo2 className="h-3.5 w-3.5 text-white/60" />
+          </button>
+          <button
+            onClick={resetAll}
+            className="p-1 rounded hover:bg-white/10 transition-colors"
+            title="Reset All"
+          >
+            <RotateCcw className="h-3.5 w-3.5 text-white/60" />
+          </button>
         </div>
       </div>
 

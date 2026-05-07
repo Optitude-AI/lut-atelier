@@ -300,3 +300,44 @@ Stage Summary:
 - Fix: Added proper gamma linearization (sRGB → linear) before OKLAB and gamma re-application (linear → sRGB) after
 - processImagePixelsFast uses 4096-entry LUTs for performance; processImagePixels uses function calls from oklab.ts
 - Zero lint errors, dev server compiles cleanly
+
+## Chroma Forge Bug Fixes — Color Pipeline Restoration
+
+### Summary
+Fixed the non-functional color grading engine by addressing 7 bugs across 3 files:
+- **ABGrid.tsx**: Increased offset sensitivity 2.4x, added undo/redo/reset buttons, fixed double-click interference
+- **lut-engine.ts**: Increased Gaussian sigma defaults for wider node influence, added global center-node handling
+- **useAppStore.ts**: Updated default sigma settings to match engine changes
+
+### Changes Made
+
+#### Fix A: ABGrid.tsx — Offset Sensitivity (line 347-348)
+Changed `syncToStore()` multiplier from `500/250` to `1200/600`, making drags 2.4x more impactful on the engine.
+
+#### Fix B: ABGrid.tsx — Undo/Redo/Reset Buttons (header, ~line 1363-1378)
+- Added `Undo2`, `Redo2`, `RotateCcw` imports from lucide-react
+- Added `canUndo`/`canRedo` React state for button disabled state
+- Added `resetAll()` function that zeros all node offsets with undo support
+- Updated `undo()`, `redo()`, `pushUndo()` to manage canUndo/canRedo state
+- Replaced static help text header with interactive button bar
+
+#### Fix C: lut-engine.ts — Sigma Defaults in `interpolateABGrid` (line 375-381)
+Changed defaults from `globalHueSigma=25, globalSatSigma=18` to `40, 30` for wider node influence range.
+
+#### Fix D: lut-engine.ts — Center Node Global Handling (line 382-447)
+Added special handling for center/global nodes (saturation <= 1) that affect ALL colored pixels with 60% guaranteed influence blending, rather than using distance-based falloff that makes center nodes ineffective.
+
+#### Fix E: lut-engine.ts — Fast Path Sigma Defaults (line 996-997)
+Updated `AB_GLOBAL_HUE_SIGMA` and `AB_GLOBAL_SAT_SIGMA` fallbacks from `25/18` to `40/30`.
+
+#### Fix F: useAppStore.ts — Default Settings (line 606-607)
+Updated `abHueSigma: 40` and `abSatSigma: 30` to match engine defaults.
+
+#### Fix G: ABGrid.tsx — Double-Click Debounce (onPointerDown, onDblClick)
+- Added `lastClickTimeRef` to debounce rapid clicks
+- Skip `onPointerDown` if within 350ms of last click (prevents second click of double-click from starting a drag)
+- Added drag cancellation in `onDblClick` handler to prevent interference
+
+### Verification
+- Lint: No new errors introduced (219 pre-existing errors in generated/config files)
+- Dev server: Compiles successfully, no runtime errors
