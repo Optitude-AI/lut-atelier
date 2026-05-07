@@ -278,3 +278,25 @@ Stage Summary:
 - Root cause: Missing OKLAB matrix constants in lut-engine.ts caused processImagePixelsFast to crash on every pixel
 - Fix: Added all 36 inlined matrix constants to lut-engine.ts
 - Result: AB grid node movements now correctly produce color changes on the image
+
+---
+Task ID: 2
+Agent: main
+Task: Fix "hue, sat, chrom, lum not working at all" — missing sRGB gamma conversion
+
+Work Log:
+- Investigated why color adjustments (hue, saturation, chroma, luminance) produce zero visible change
+- Traced data flow: ABGrid syncToStore → Zustand abNodes → ImageViewer → buildABNodeArrays → processImagePixelsFast
+- Verified store updates correctly (node offsets computed and stored)
+- Verified buildABNodeArrays correctly filters and builds typed arrays
+- Verified Gaussian weighting logic is sound (sigma 25 hue / 18 sat)
+- Found the ROOT CAUSE: processImagePixelsFast passes sRGB gamma-encoded values (0-1 from uint8/255) directly into the OKLAB M1 matrix conversion, which expects LINEAR RGB
+- The same bug exists in processImagePixels
+- Fixed processImagePixelsFast: Added 4096-entry gamma LUTs (SRGB_TO_LIN, LIN_TO_SRGB_U8), linearize before OKLAB, convert back using rgbModified flag
+- Fixed processImagePixels: Added srgbGammaToLinear() before OKLAB block and linearToSrgbGamma() after, imported from oklab.ts
+
+Stage Summary:
+- Root cause: Missing sRGB gamma → linear RGB conversion before OKLAB caused all hue/chroma calculations to be garbage
+- Fix: Added proper gamma linearization (sRGB → linear) before OKLAB and gamma re-application (linear → sRGB) after
+- processImagePixelsFast uses 4096-entry LUTs for performance; processImagePixels uses function calls from oklab.ts
+- Zero lint errors, dev server compiles cleanly

@@ -17,6 +17,8 @@ import {
   linearRGBToOKLAB,
   oklabToLinearRGB,
   gamutClipOKLAB,
+  srgbGammaToLinear,
+  linearToSrgbGamma,
 } from './oklab';
 
 // ─── Inlined OKLAB matrix constants (hot-loop performance) ───
@@ -818,6 +820,11 @@ export function processImagePixels(
 
     // ── Step 3 & 4: Perceptual colour deformation in OKLAB ──
     if (hasActiveABNodes || hasActiveCLNodes) {
+      // sRGB → Linear (required before OKLAB)
+      rOut = srgbGammaToLinear(rOut);
+      gOut = srgbGammaToLinear(gOut);
+      bOut = srgbGammaToLinear(bOut);
+
       const [okL, okA, okB] = linearRGBToOKLAB(rOut, gOut, bOut);
       const okChroma = Math.sqrt(okA * okA + okB * okB);
       const okLPct = okL * 100;
@@ -875,6 +882,11 @@ export function processImagePixels(
           }
         }
       }
+
+      // Linear → sRGB (convert back after OKLAB processing)
+      rOut = linearToSrgbGamma(rOut);
+      gOut = linearToSrgbGamma(gOut);
+      bOut = linearToSrgbGamma(bOut);
     }
 
     // ── Step 5: Intensity blending ──
@@ -1002,6 +1014,20 @@ export function processImagePixelsFast(
   const totalPixels = pixels.length;
   const inv255 = 1 / 255;
 
+  // ── sRGB gamma ↔ linear LUTs (4096 entries for 12-bit precision) ──
+  const SRGB_TO_LIN = new Float64Array(4096);
+  const LIN_TO_SRGB_U8 = new Uint8Array(4096);
+  for (let _gi = 0; _gi < 4096; _gi++) {
+    const _c = _gi / 4095;
+    SRGB_TO_LIN[_gi] = _c >= 0.04045
+      ? Math.pow((_c + 0.055) / 1.055, 2.4)
+      : _c / 12.92;
+    const _g = _c >= 0.0031308
+      ? 1.055 * Math.pow(_c, 1.0 / 2.4) - 0.055
+      : 12.92 * _c;
+    LIN_TO_SRGB_U8[_gi] = Math.min(255, Math.max(0, (_g * 255 + 0.5) | 0));
+  }
+
   for (let i = 0; i < totalPixels; i += 4) {
     const origR = pixels[i];
     const origG = pixels[i + 1];
@@ -1112,11 +1138,24 @@ export function processImagePixelsFast(
     // ── Step 3 & 4: Perceptual colour deformation in OKLAB ──
     if (needsHSL) {
       // ════════════════════════════════════════════════════════════════════════
+      // sRGB → Linear RGB (required before OKLAB conversion)
+      // ════════════════════════════════════════════════════════════════════════
+      let _liR = (rOut * 4095 + 0.5) | 0;
+      let _liG = (gOut * 4095 + 0.5) | 0;
+      let _liB = (bOut * 4095 + 0.5) | 0;
+      if (_liR < 0) _liR = 0; else if (_liR > 4095) _liR = 4095;
+      if (_liG < 0) _liG = 0; else if (_liG > 4095) _liG = 4095;
+      if (_liB < 0) _liB = 0; else if (_liB > 4095) _liB = 4095;
+      const pLinR = SRGB_TO_LIN[_liR];
+      const pLinG = SRGB_TO_LIN[_liG];
+      const pLinB = SRGB_TO_LIN[_liB];
+
+      // ════════════════════════════════════════════════════════════════════════
       // Inline Linear RGB → OKLAB (no function calls, ~50 FLOPs)
       // ════════════════════════════════════════════════════════════════════════
-      const lms_l = M1_00 * rOut + M1_01 * gOut + M1_02 * bOut;
-      const lms_m = M1_10 * rOut + M1_11 * gOut + M1_12 * bOut;
-      const lms_s = M1_20 * rOut + M1_21 * gOut + M1_22 * bOut;
+      const lms_l = M1_00 * pLinR + M1_01 * pLinG + M1_02 * pLinB;
+      const lms_m = M1_10 * pLinR + M1_11 * pLinG + M1_12 * pLinB;
+      const lms_s = M1_20 * pLinR + M1_21 * pLinG + M1_22 * pLinB;
       const lms_l_ = Math.cbrt(lms_l);
       const lms_m_ = Math.cbrt(lms_m);
       const lms_s_ = Math.cbrt(lms_s);
@@ -1133,6 +1172,7 @@ export function processImagePixelsFast(
         const okHueDeg = Math.atan2(okB, okA) * (180 / Math.PI);
         const okHueWrap = okHueDeg < 0 ? okHueDeg + 360 : okHueDeg;
         const okChromaPct = okChroma * 500; // Scale chroma to 0-100 range for grid compatibility
+        let rgbModified = false;
 
         // ── Step 3: A/B Grid — Hue / Chroma deformation ─────────────────────
         if (hasAB) {
@@ -1243,6 +1283,7 @@ export function processImagePixelsFast(
             rOut = MI1_00 * fl + MI1_01 * fm + MI1_02 * fsv;
             gOut = MI1_10 * fl + MI1_11 * fm + MI1_12 * fsv;
             bOut = MI1_20 * fl + MI1_21 * fm + MI1_22 * fsv;
+            rgbModified = true;
           }
         }
 
@@ -1326,9 +1367,25 @@ export function processImagePixelsFast(
               rOut = clR < 0 ? clR * 0.1 : clR > 1 ? 1 + (clR - 1) * 0.1 : clR;
               gOut = clG < 0 ? clG * 0.1 : clG > 1 ? 1 + (clG - 1) * 0.1 : clG;
               bOut = clB < 0 ? clB * 0.1 : clB > 1 ? 1 + (clB - 1) * 0.1 : clB;
+              rgbModified = true;
             }
           }
         }
+
+      // Convert linear RGB back to sRGB gamma if OKLAB processing modified values
+      if (rgbModified) {
+        let _loR = rOut * 4095 + 0.5;
+        if (_loR < 0) _loR = 0; else if (_loR > 4095) _loR = 4095;
+        rOut = LIN_TO_SRGB_U8[_loR | 0] * inv255;
+
+        let _loG = gOut * 4095 + 0.5;
+        if (_loG < 0) _loG = 0; else if (_loG > 4095) _loG = 4095;
+        gOut = LIN_TO_SRGB_U8[_loG | 0] * inv255;
+
+        let _loB = bOut * 4095 + 0.5;
+        if (_loB < 0) _loB = 0; else if (_loB > 4095) _loB = 4095;
+        bOut = LIN_TO_SRGB_U8[_loB | 0] * inv255;
+      }
       }
     }
 
