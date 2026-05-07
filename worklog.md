@@ -202,3 +202,59 @@ Files modified:
 - src/lib/lut-engine.ts (sigma defaults, property name fix)
 - src/components/chroma-forge/ImageViewer.tsx (pass sigma settings to engine)
 - src/store/useAppStore.ts (update default sigma values)
+---
+Task ID: 2
+Agent: main
+Task: Implement OKLAB perceptual color space engine (Phase 1 of professional color grading vision)
+
+Work Log:
+- Created `/home/z/my-project/src/lib/oklab.ts` — Complete OKLAB color space library
+  - Linear RGB ↔ OKLAB conversions with inline matrix constants
+  - sRGB gamma encode/decode
+  - OKLAB ↔ HCL (Hue-Chroma-Lightness) polar conversions
+  - `maxGamutChroma()` — binary search for sRGB gamut boundary at given hue/L
+  - `isInGamut()` — fast gamut membership test
+  - `gamutClipOKLAB()` — soft and hard gamut clipping with perceptual compression curve
+  - `oklabToRGB8()` / `rgb8ToOKLAB()` — uint8 convenience functions with clipping
+  - `isSkinToneOKLAB()` — perceptual skin tone detection (hue 60°-100°, chroma 0.015-0.15)
+  - `oklabDeltaE()` — perceptual color distance
+
+- Rewrote `/home/z/my-project/src/lib/lut-engine.ts` — Full OKLAB pipeline
+  - Added OKLAB import + inlined matrix constants for hot-loop performance
+  - Updated `processImagePixelsFast()` (live preview path):
+    - Replaced inline HSL conversion with inline OKLAB (Linear RGB → LMS → cbrt → OKLAB)
+    - AB grid now operates in OKLAB Hue/Chroma space
+    - CL grid now operates in OKLAB Chroma/Luminance space
+    - Added gamut-aware soft clipping (binary search + perceptual compression curve)
+    - Chroma scaled ×500 to maintain grid compatibility (0-100 range)
+  - Updated `applyColorGradePixel()` (LUT export path) to use OKLAB
+  - Updated `processImagePixels()` (non-fast path) to use OKLAB
+  - Pipeline: sRGB → Linear RGB → Curves → Channels → OKLAB → AB Grid deform → CL Grid → Gamut clip → Linear RGB → sRGB
+
+- Updated `/home/z/my-project/src/components/chroma-forge/grids/ABGrid.tsx` — OKLAB UI
+  - Background canvas now renders OKLAB perceptual hue wheel (non-circular gamut boundary)
+  - Pre-computed gamut boundary lookup (360 angles at L=0.5)
+  - Inline OKLAB → sRGB conversion in pixel loop (no function call overhead)
+  - Skin tone overlay updated to OKLAB hue range (40°-100°)
+  - Mesh fill triangles use OKLAB colors
+  - Before/after swatch uses OKLAB colors
+  - Tooltip color swatch uses OKLAB RGB
+
+Stage Summary:
+- The entire color grading pipeline now operates in OKLAB perceptual color space
+- Key improvements over HSL:
+  - Perceptually uniform hue: equal angular steps = equal perceived differences
+  - Perceptually uniform chroma: equal chroma steps = equal saturation changes
+  - No hue shift when adjusting chroma (HSL has severe hue skew)
+  - Gamut boundary awareness prevents clipping artefacts
+  - Soft gamut compression for out-of-gamut colors
+  - The hue wheel background now shows the actual OKLAB gamut shape
+- All three processing paths (fast, standard, per-pixel) consistently use OKLAB
+- Zero lint errors, clean compilation
+
+Files created:
+- src/lib/oklab.ts (new, 320+ lines)
+
+Files modified:
+- src/lib/lut-engine.ts (engine rewrite, ~300 lines changed)
+- src/components/chroma-forge/grids/ABGrid.tsx (background rendering, ~150 lines changed)

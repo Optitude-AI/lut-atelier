@@ -3,7 +3,7 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useAppStore } from '@/store/useAppStore';
-import { hslToRgb } from '@/lib/colorUtils';
+import { oklabToRGB8 } from '@/lib/oklab';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Types
@@ -53,6 +53,60 @@ const INV_TWO_PI = 1 / TWO_PI;
 const MAX_UNDO = 50;
 const SPRING_DURATION = 300;
 const N = 16; // number of branches per ring
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OKLAB Perceptual Color Space — Inline matrix constants
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// OKLAB → LMS' (inverse M2)
+const MI2_00 = 1.0, MI2_01 = 0.3963377774, MI2_02 = 0.2158037573;
+const MI2_10 = 1.0, MI2_11 = -0.1055613458, MI2_12 = -0.0638541728;
+const MI2_20 = 1.0, MI2_21 = -0.0894841775, MI2_22 = -1.2914855480;
+// LMS → Linear sRGB (inverse M1)
+const MI1_00 = +4.0767416621, MI1_01 = -3.3077115913, MI1_02 = +0.2309699292;
+const MI1_10 = -1.2684380046, MI1_11 = +2.6097574011, MI1_12 = -0.3413193965;
+const MI1_20 = -0.0041960863, MI1_21 = -0.7034186147, MI1_22 = +1.7076147010;
+
+// Module-level gamut boundary cache for L=0.5 (360 entries, one per degree)
+let gamutBoundary = new Float32Array(360);
+
+/** Pre-compute max in-gamut chroma at L=0.5 for each degree 0-359 via binary search. */
+function computeGamutBoundary(): Float32Array {
+  const gb = new Float32Array(360);
+  for (let deg = 0; deg < 360; deg++) {
+    const hRad = deg * Math.PI / 180;
+    const cosH = Math.cos(hRad);
+    const sinH = Math.sin(hRad);
+    let lo = 0, hi = 0.5;
+    for (let gi = 0; gi < 20; gi++) {
+      const mid = (lo + hi) * 0.5;
+      const a = mid * cosH, b = mid * sinH;
+      const l_ = MI2_00 * 0.5 + MI2_01 * a + MI2_02 * b;
+      const m_ = MI2_10 * 0.5 + MI2_11 * a + MI2_12 * b;
+      const s_ = MI2_20 * 0.5 + MI2_21 * a + MI2_22 * b;
+      const l = l_ * l_ * l_, m = m_ * m_ * m_, sv = s_ * s_ * s_;
+      const r = MI1_00 * l + MI1_01 * m + MI1_02 * sv;
+      const g = MI1_10 * l + MI1_11 * m + MI1_12 * sv;
+      const bv = MI1_20 * l + MI1_21 * m + MI1_22 * sv;
+      if (r < -0.0001 || r > 1.0001 || g < -0.0001 || g > 1.0001 || bv < -0.0001 || bv > 1.0001) {
+        hi = mid;
+      } else {
+        lo = mid;
+      }
+    }
+    gb[deg] = lo;
+  }
+  return gb;
+}
+
+/** Convert OKLAB (L, a, b) to sRGB uint8 with hard gamut clip. Uses imported oklabToRGB8. */
+function oklabHueSatToRGB8(hueDeg: number, satScaled: number): [number, number, number] {
+  const hueRad = hueDeg * Math.PI / 180;
+  const deg = ((Math.round(hueDeg) % 360) + 360) % 360;
+  const maxC = gamutBoundary[deg];
+  const chroma = (satScaled / 100) * maxC;
+  return oklabToRGB8(0.5, chroma * Math.cos(hueRad), chroma * Math.sin(hueRad), 'hard');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Mesh topology — 65 nodes (center + 4 rings × 16), 176 connections,
@@ -366,7 +420,19 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     const mr = Math.min(cx, cy) * 0.95;
     const mr2 = mr * mr;
 
-    // Pixel-by-pixel hue wheel via ImageData
+    // Pre-compute OKLAB gamut boundary at L=0.5 for each degree
+    gamutBoundary = computeGamutBoundary();
+
+    // Build sRGB gamma LUT (linear 0-1 → uint8 0-255) for fast pixel rendering
+    const GAMMA_LUT = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) {
+      const c = i / 255;
+      GAMMA_LUT[i] = c >= 0.0031308
+        ? (1.055 * Math.pow(c, 1 / 2.4) - 0.055) * 255 + 0.5 | 0
+        : (12.92 * c) * 255 + 0.5 | 0;
+    }
+
+    // Pixel-by-pixel OKLAB perceptual hue wheel via ImageData
     for (let py = 0; py < ih; py++) {
       const dy = py - cy;
       const dy2 = dy * dy;
@@ -377,16 +443,41 @@ export default function ABGrid({ className = '' }: { className?: string }) {
 
         if (dist2 <= mr2) {
           const dist = Math.sqrt(dist2);
-          let a = Math.atan2(dx, -dy);
-          if (a < 0) a += TWO_PI;
-          const hue = a * INV_TWO_PI * 360;
-          const sat = (dist / mr) * 100;
-          const [r, g, b] = hslToRgb(hue, sat, 50);
-          // Subtle vignette
-          const vig = 1 - (dist / mr) ** 2 * 0.35;
-          d[idx] = (r * vig) | 0;
-          d[idx + 1] = (g * vig) | 0;
-          d[idx + 2] = (b * vig) | 0;
+          let angle = Math.atan2(dx, -dy);
+          if (angle < 0) angle += TWO_PI;
+
+          // Look up max gamut chroma at this OKLAB hue
+          const deg = ((angle * 180 / Math.PI) % 360 + 360) % 360;
+          const maxC = gamutBoundary[deg | 0];
+          const chroma = (dist / mr) * maxC;
+
+          // Compute OKLAB a,b from polar (canvas angle = OKLAB hue)
+          const okA = chroma * Math.cos(angle);
+          const okB = chroma * Math.sin(angle);
+          const L = 0.5;
+
+          // Inline OKLAB → LMS'
+          const l_ = MI2_00 * L + MI2_01 * okA + MI2_02 * okB;
+          const m_ = MI2_10 * L + MI2_11 * okA + MI2_12 * okB;
+          const s_ = MI2_20 * L + MI2_21 * okA + MI2_22 * okB;
+          // LMS' → LMS (cube)
+          const l = l_ * l_ * l_;
+          const m = m_ * m_ * m_;
+          const sv = s_ * s_ * s_;
+          // LMS → Linear sRGB
+          let lr = MI1_00 * l + MI1_01 * m + MI1_02 * sv;
+          let lg = MI1_10 * l + MI1_11 * m + MI1_12 * sv;
+          let lb = MI1_20 * l + MI1_21 * m + MI1_22 * sv;
+          // Hard clip at gamut boundary
+          if (lr < 0) lr = 0; else if (lr > 1) lr = 1;
+          if (lg < 0) lg = 0; else if (lg > 1) lg = 1;
+          if (lb < 0) lb = 0; else if (lb > 1) lb = 1;
+
+          // Apply subtle vignette
+          const vig = 1 - (dist / mr) * (dist / mr) * 0.35;
+          d[idx]     = (GAMMA_LUT[(lr * 255 + 0.5) | 0] * vig) | 0;
+          d[idx + 1] = (GAMMA_LUT[(lg * 255 + 0.5) | 0] * vig) | 0;
+          d[idx + 2] = (GAMMA_LUT[(lb * 255 + 0.5) | 0] * vig) | 0;
           d[idx + 3] = 255;
         } else {
           d[idx] = 10;
@@ -405,8 +496,9 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     const scy = h / 2;
     const smr = Math.min(scx, scy) * 0.95;
 
-    const SKIN_HUE_START = (15 / 360) * TWO_PI;
-    const SKIN_HUE_END = (45 / 360) * TWO_PI;
+    // OKLAB skin tones are at hue 40°–100° (orange-yellow range in OKLAB)
+    const SKIN_HUE_START = (40 / 360) * TWO_PI;
+    const SKIN_HUE_END = (100 / 360) * TWO_PI;
     ctx.beginPath();
     ctx.moveTo(scx, scy);
     ctx.arc(scx, scy, smr, SKIN_HUE_START - Math.PI / 2, SKIN_HUE_END - Math.PI / 2);
@@ -415,7 +507,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     ctx.fill();
 
     // Skin tone label
-    const labelAngle = (30 / 360) * TWO_PI - Math.PI / 2;
+    const labelAngle = (70 / 360) * TWO_PI - Math.PI / 2; // midpoint of 40°–100°
     const labelR = smr * 0.55;
     ctx.font = '9px system-ui';
     ctx.fillStyle = 'rgba(255, 200, 160, 0.4)';
@@ -484,7 +576,7 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       const mx = (ax + bx + ccx) / 3;
       const my = (ay + by + ccy) / 3;
       const { hue, saturation: sat } = hueSatAt(mx, my, cx, cy, mr);
-      const [r, g, b] = hslToRgb(hue, sat, 50);
+      const [r, g, b] = oklabHueSatToRGB8(hue, sat);
 
       ctx.beginPath();
       ctx.moveTo(ax, ay);
@@ -608,11 +700,11 @@ export default function ABGrid({ className = '' }: { className?: string }) {
           // Original color at home position
           const origHue = ((sn.angleRad / TWO_PI) * 360 + 360) % 360;
           const origSat = sn.radiusFrac * 100;
-          const [or, og, ob] = hslToRgb(origHue, origSat, 50);
+          const [or, og, ob] = oklabHueSatToRGB8(origHue, origSat);
 
           // Current color at offset position
           const { hue: curHue, saturation: curSat } = hueSatAt(snx, sny, cx, cy, mr);
-          const [cr, cg, cb] = hslToRgb(curHue, curSat, 50);
+          const [cr, cg, cb] = oklabHueSatToRGB8(curHue, curSat);
 
           // Draw split swatch (10×8 px)
           const sw = 10;
@@ -1326,7 +1418,10 @@ export default function ABGrid({ className = '' }: { className?: string }) {
               <div
                 className="h-3 w-3 rounded-sm border border-white/20"
                 style={{
-                  backgroundColor: `hsl(${tip.hue}, ${tip.saturation}%, 50%)`,
+                  backgroundColor: (() => {
+                    const [r, g, b] = oklabHueSatToRGB8(tip.hue, tip.saturation);
+                    return `rgb(${r},${g},${b})`;
+                  })(),
                 }}
               />
               <span className="font-medium text-white/90">

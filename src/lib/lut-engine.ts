@@ -1,7 +1,25 @@
 /**
- * LUT Engine - Core utilities for LUT generation and color grading
- * Shared between .cube export and image export API routes.
+ * Chroma Forge — Perceptual Color Grading Engine
+ *
+ * Architecture:
+ *   sRGB ──gamma──► Linear RGB ──curves+channels──► OKLAB ──AB grid deform──► OKLAB' ──CL grid──► OKLAB'' ──gamut clip──► Linear RGB ──gamma──► sRGB
+ *
+ * The AB grid operates in OKLAB perceptual color space (Hue-Chroma-Lightness):
+ *   - Equal hue steps = equal perceived hue differences
+ *   - Equal chroma steps = equal perceived saturation differences
+ *   - No hue shift when adjusting chroma (unlike HSL)
+ *   - Gamut boundary awareness prevents clipping artefacts
+ *
+ * The CL grid operates in OKLAB chroma/luminance space.
  */
+
+import {
+  linearRGBToOKLAB,
+  oklabToLinearRGB,
+  gamutClipOKLAB,
+} from './oklab';
+
+// ─── Inlined OKLAB matrix constants (hot-loop performance) ───
 
 // ─── Types (mirrored from useAppStore for server-side use) ───
 
@@ -538,51 +556,64 @@ export function applyColorGradePixel(
   if (gChannel && gChannel.enabled) gOut = applyChannelAdjustment(gOut, gChannel);
   if (bChannel && bChannel.enabled) bOut = applyChannelAdjustment(bOut, bChannel);
 
-  // ── Step 3: A/B grid hue-saturation shifts ──
-  const [h, s, l] = rgbToHsl(rOut, gOut, bOut);
-
+  // ── Step 3: A/B grid — perceptual hue/chroma shifts in OKLAB ──
   if (abNodes && abNodes.length > 0) {
-    const [hueShift, satShift] = interpolateABGrid(abNodes, h, s, l);
-    let newH = h + hueShift;
-    // Wrap hue to 0-360
-    newH = ((newH % 360) + 360) % 360;
-    // Multiplicative saturation: proportional change, preserves low-sat pixels
-    const newS = Math.max(0, Math.min(100, s * (1 + satShift / 100)));
+    const [okL, okA, okB] = linearRGBToOKLAB(rOut, gOut, bOut);
+    const okChroma = Math.sqrt(okA * okA + okB * okB);
+    const okLPct = okL * 100;
 
-    // ── Lightness compensation ──
-    // Reducing HSL saturation causes perceived darkening (Helmholtz-Kohlrausch effect).
-    // When saturation decreases, bump lightness proportionally to maintain perceived brightness.
-    let compL = l;
-    if (newS < s && s > 1 && l > 2 && l < 98) {
-      const satLossFrac = (s - newS) / s; // 0..1
-      compL = Math.min(100, l + satLossFrac * 12);
+    if (okChroma > 0.003 && okLPct > 2 && okLPct < 98) {
+      let okHueDeg = Math.atan2(okB, okA) * (180 / Math.PI);
+      if (okHueDeg < 0) okHueDeg += 360;
+      const okChromaPct = okChroma * 500;
+
+      // Convert GridNode[] offsets to compatible format for interpolateABGrid
+      // Node hues are in OKLAB degrees, saturations are OKLAB chroma × 500
+      const [hueShift, chromaShift] = interpolateABGrid(abNodes, okHueDeg, okChromaPct, okLPct);
+
+      let newHueRad = (okHueDeg + hueShift) * (Math.PI / 180);
+      let newChroma = okChroma * (1 + chromaShift / 100);
+      if (newChroma < 0) newChroma = 0;
+
+      let newA = newChroma * Math.cos(newHueRad);
+      let newB = newChroma * Math.sin(newHueRad);
+
+      // Gamut clip
+      [newA, newB] = gamutClipOKLAB(okL, newA, newB, 'soft');
+
+      const [abR, abG, abB] = oklabToLinearRGB(okL, newA, newB);
+      rOut = abR;
+      gOut = abG;
+      bOut = abB;
     }
-
-    const [abR, abG, abB] = hslToRgb(newH, newS, compL);
-    rOut = abR;
-    gOut = abG;
-    bOut = abB;
   }
 
-  // ── Step 4: C/L grid chroma-luminance shifts ──
-  // Recalculate HSL after A/B shifts
-  const [h2, s2, l2] = rgbToHsl(rOut, gOut, bOut);
-
+  // ── Step 4: C/L grid — chroma/luminance shaping in OKLAB ──
   if (clNodes && clNodes.length > 0) {
-    const [chromaShift, lumShift] = interpolateCLGrid(clNodes, h2, s2, l2);
-    const newS2 = Math.max(0, Math.min(100, s2 + chromaShift));
-    let newL2 = Math.max(0, Math.min(100, l2 + lumShift));
+    const [okL, okA, okB] = linearRGBToOKLAB(rOut, gOut, bOut);
+    const okChroma = Math.sqrt(okA * okA + okB * okB);
+    const okLPct = okL * 100;
+    const okChromaPct = okChroma * 500;
 
-    // ── Lightness compensation when saturation decreases ──
-    if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
-      const satLossFrac = (s2 - newS2) / s2;
-      newL2 = Math.min(100, newL2 + satLossFrac * 12);
+    if (okChromaPct >= 1.5) {
+      const [chromaShift, lumShift] = interpolateCLGrid(clNodes, 0, okChromaPct, okLPct);
+
+      let newCLChroma = okChroma + chromaShift * 0.004;
+      if (newCLChroma < 0) newCLChroma = 0;
+
+      let newCLLum = okL + lumShift * 0.01;
+      if (newCLLum < 0) newCLLum = 0;
+      if (newCLLum > 1) newCLLum = 1;
+
+      const hueAngle = Math.atan2(okB, okA);
+      const finalCLA = newCLChroma * Math.cos(hueAngle);
+      const finalCLB = newCLChroma * Math.sin(hueAngle);
+
+      const [clR, clG, clB] = oklabToLinearRGB(newCLLum, finalCLA, finalCLB);
+      rOut = clR;
+      gOut = clG;
+      bOut = clB;
     }
-
-    const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
-    rOut = clR;
-    gOut = clG;
-    bOut = clB;
   }
 
   // ── Step 5: Global intensity blending ──
@@ -764,56 +795,64 @@ export function processImagePixels(
     if (gChannel && gChannel.enabled) gOut = applyChannelAdjustment(gOut, gChannel);
     if (bChannel && bChannel.enabled) bOut = applyChannelAdjustment(bOut, bChannel);
 
-    // ── Step 3 & 4: Grid shifts (only if active nodes exist) ──
+    // ── Step 3 & 4: Perceptual colour deformation in OKLAB ──
     if (hasActiveABNodes || hasActiveCLNodes) {
-      const [h, s, l] = rgbToHsl(rOut, gOut, bOut);
+      const [okL, okA, okB] = linearRGBToOKLAB(rOut, gOut, bOut);
+      const okChroma = Math.sqrt(okA * okA + okB * okB);
+      const okLPct = okL * 100;
 
-      if (hasActiveABNodes) {
-        const [hueShift, satShift] = interpolateABGrid(abNodes!, h, s, l);
-        let newH = h + hueShift;
-        newH = ((newH % 360) + 360) % 360;
-        // Multiplicative saturation: proportional change
-        const rawS = s * (1 + satShift / 100);
-        const newS = rawS < 0 ? 0 : rawS > 100 ? 100 : rawS;
+      if (okChroma > 0.003 && okLPct > 2 && okLPct < 98) {
+        let okHueDeg = Math.atan2(okB, okA) * (180 / Math.PI);
+        if (okHueDeg < 0) okHueDeg += 360;
+        const okChromaPct = okChroma * 500;
 
-        // ── Lightness compensation when saturation decreases ──
-        let abL = l;
-        if (newS < s && s > 1 && l > 2 && l < 98) {
-          const satLossFrac = (s - newS) / s;
-          abL = Math.min(100, l + satLossFrac * 12);
-        }
-
-        const [abR, abG, abB] = hslToRgb(newH, newS, abL);
-        rOut = abR;
-        gOut = abG;
-        bOut = abB;
-      }
-
-      if (hasActiveCLNodes) {
-        // Only recompute HSL if AB grid modified the values
-        let h2: number, s2: number, l2: number;
         if (hasActiveABNodes) {
-          [h2, s2, l2] = rgbToHsl(rOut, gOut, bOut);
-        } else {
-          h2 = h;
-          s2 = s;
-          l2 = l;
+          const [hueShift, chromaShift] = interpolateABGrid(abNodes!, okHueDeg, okChromaPct, okLPct);
+          let newHueRad = (okHueDeg + hueShift) * (Math.PI / 180);
+          let newChroma = okChroma * (1 + chromaShift / 100);
+          if (newChroma < 0) newChroma = 0;
+
+          let newA = newChroma * Math.cos(newHueRad);
+          let newB = newChroma * Math.sin(newHueRad);
+
+          const [cA, cB] = gamutClipOKLAB(okL, newA, newB, 'soft');
+          const [abR, abG, abB] = oklabToLinearRGB(okL, cA, cB);
+          rOut = abR;
+          gOut = abG;
+          bOut = abB;
         }
 
-        const [chromaShift, lumShift] = interpolateCLGrid(clNodes!, h2, s2, l2);
-        const newS2 = s2 + chromaShift < 0 ? 0 : s2 + chromaShift > 100 ? 100 : s2 + chromaShift;
-        let newL2 = l2 + lumShift < 0 ? 0 : l2 + lumShift > 100 ? 100 : l2 + lumShift;
+        if (hasActiveCLNodes) {
+          // Re-derive OKLAB if AB grid modified values
+          let curL: number, curA: number, curB: number, curChroma: number;
+          if (hasActiveABNodes) {
+            [curL, curA, curB] = linearRGBToOKLAB(rOut, gOut, bOut);
+            curChroma = Math.sqrt(curA * curA + curB * curB);
+          } else {
+            curL = okL; curA = okA; curB = okB; curChroma = okChroma;
+          }
 
-        // ── Lightness compensation when saturation decreases ──
-        if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
-          const satLossFrac = (s2 - newS2) / s2;
-          newL2 = Math.min(100, newL2 + satLossFrac * 12);
+          const curChromaPct = curChroma * 500;
+          const curLPct = curL * 100;
+
+          if (curChromaPct >= 1.5) {
+            const [chromaShift, lumShift] = interpolateCLGrid(clNodes!, 0, curChromaPct, curLPct);
+            let newCLChroma = curChroma + chromaShift * 0.004;
+            if (newCLChroma < 0) newCLChroma = 0;
+            let newCLLum = curL + lumShift * 0.01;
+            if (newCLLum < 0) newCLLum = 0;
+            if (newCLLum > 1) newCLLum = 1;
+
+            const hueAngle = Math.atan2(curB, curA);
+            const finalCLA = newCLChroma * Math.cos(hueAngle);
+            const finalCLB = newCLChroma * Math.sin(hueAngle);
+
+            const [clR, clG, clB] = oklabToLinearRGB(newCLLum, finalCLA, finalCLB);
+            rOut = clR;
+            gOut = clG;
+            bOut = clB;
+          }
         }
-
-        const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
-        rOut = clR;
-        gOut = clG;
-        bOut = clB;
       }
     }
 
@@ -1049,229 +1088,227 @@ export function processImagePixelsFast(
       if (bOffset !== 0) bOut += bOffset;
     }
 
-    // ── Step 3 & 4: Grid shifts ──
+    // ── Step 3 & 4: Perceptual colour deformation in OKLAB ──
     if (needsHSL) {
-      // Inline RGB to HSL
-      const cMax = rOut > gOut ? (rOut > bOut ? rOut : bOut) : (gOut > bOut ? gOut : bOut);
-      const cMin = rOut < gOut ? (rOut < bOut ? rOut : bOut) : (gOut < bOut ? gOut : bOut);
-      const l = (cMax + cMin) * 0.5;
+      // ════════════════════════════════════════════════════════════════════════
+      // Inline Linear RGB → OKLAB (no function calls, ~50 FLOPs)
+      // ════════════════════════════════════════════════════════════════════════
+      const lms_l = M1_00 * rOut + M1_01 * gOut + M1_02 * bOut;
+      const lms_m = M1_10 * rOut + M1_11 * gOut + M1_12 * bOut;
+      const lms_s = M1_20 * rOut + M1_21 * gOut + M1_22 * bOut;
+      const lms_l_ = Math.cbrt(lms_l);
+      const lms_m_ = Math.cbrt(lms_m);
+      const lms_s_ = Math.cbrt(lms_s);
+      const okL = M2_00 * lms_l_ + M2_01 * lms_m_ + M2_02 * lms_s_;
+      const okA = M2_10 * lms_l_ + M2_11 * lms_m_ + M2_12 * lms_s_;
+      const okB = M2_20 * lms_l_ + M2_21 * lms_m_ + M2_22 * lms_s_;
 
-      if (cMax !== cMin) {
-        const d = cMax - cMin;
-        const s = l > 0.5 ? d / (2 - cMax - cMin) : d / (cMax + cMin);
+      // OKLAB → polar (hue, chroma)
+      const okChroma = Math.sqrt(okA * okA + okB * okB);
 
-        let h: number;
-        if (cMax === rOut) {
-          h = ((gOut - bOut) / d + (gOut < bOut ? 6 : 0)) / 6;
-        } else if (cMax === gOut) {
-          h = ((bOut - rOut) / d + 2) / 6;
-        } else {
-          h = ((rOut - gOut) / d + 4) / 6;
-        }
-        const hDeg = h * 360;
-        const sPct = s * 100;
-        const lPct = l * 100;
+      // Only process coloured pixels (skip near-achromatic and extreme lightness)
+      const okLPct = okL * 100;
+      if (okChroma > 0.003 && okLPct > 2 && okLPct < 98) {
+        const okHueDeg = Math.atan2(okB, okA) * (180 / Math.PI);
+        const okHueWrap = okHueDeg < 0 ? okHueDeg + 360 : okHueDeg;
+        const okChromaPct = okChroma * 500; // Scale chroma to 0-100 range for grid compatibility
 
-        // AB grid (hue/sat shifts)
-        if (hasAB && sPct >= 5 && lPct >= 3 && lPct <= 97) {
+        // ── Step 3: A/B Grid — Hue / Chroma deformation ─────────────────────
+        if (hasAB) {
           let totalWeight = 0;
           let hueShift = 0;
-          let satShift = 0;
+          let chromaShift = 0;
 
           for (let n = 0; n < abCount; n++) {
-            let hueDist = hDeg - abHues[n];
+            // Circular hue distance (0-180)
+            let hueDist = okHueWrap - abHues[n];
             if (hueDist < 0) hueDist = -hueDist;
             if (hueDist > 180) hueDist = 360 - hueDist;
 
-            const satDist = sPct - abSats[n];
-            const absSatDist = satDist < 0 ? -satDist : satDist;
+            // Chroma distance (scaled to match grid units)
+            const chromaDist = okChromaPct - abSats[n];
+            const absChromaDist = chromaDist < 0 ? -chromaDist : chromaDist;
 
-            // Per-node anisotropic sigma with global fallback
+            // Anisotropic Gaussian falloff with per-node sigma
             const nodeHueSigma = abHueSigmas[n] > 0 ? abHueSigmas[n] : AB_GLOBAL_HUE_SIGMA;
-            const nodeSatSigma = abSatSigmas[n] > 0 ? abSatSigmas[n] : AB_GLOBAL_SAT_SIGMA;
-            const nodeMult = abSigmaMults[n];
-            const effHueSigma = nodeHueSigma * nodeMult;
-            const effSatSigma = nodeSatSigma * nodeMult;
+            const nodeChromaSigma = abSatSigmas[n] > 0 ? abSatSigmas[n] : AB_GLOBAL_SAT_SIGMA;
+            const effHueSigma = nodeHueSigma * abSigmaMults[n];
+            const effChromaSigma = nodeChromaSigma * abSigmaMults[n];
+
             const weight = Math.exp(
               -(hueDist * hueDist) / (2 * effHueSigma * effHueSigma)
-              - (absSatDist * absSatDist) / (2 * effSatSigma * effSatSigma)
+              - (absChromaDist * absChromaDist) / (2 * effChromaSigma * effChromaSigma)
             );
 
             totalWeight += weight;
             hueShift += abOffX[n] * weight;
-            satShift += abOffY[n] * weight;
+            chromaShift += abOffY[n] * weight;
           }
 
           if (totalWeight > 0) {
             hueShift /= totalWeight;
-            satShift /= totalWeight;
+            chromaShift /= totalWeight;
 
-            let newH = hDeg + hueShift;
-            newH = newH % 360;
-            if (newH < 0) newH += 360;
+            // Apply hue rotation (degrees → radians, add to current angle)
+            let newHueRad = (okHueWrap + hueShift) * (Math.PI / 180);
 
-            // Multiplicative saturation: proportional change, preserves low-sat pixels
-            let newS = sPct * (1 + satShift / 100);
-            if (newS < 0) newS = 0;
-            else if (newS > 100) newS = 100;
+            // Apply chroma shift (multiplicative for proportional changes)
+            let newChroma = okChroma * (1 + chromaShift / 100);
+            if (newChroma < 0) newChroma = 0;
 
-            // ── Lightness compensation when saturation decreases ──
-            let compL = lPct;
-            if (newS < sPct && sPct > 1 && lPct > 2 && lPct < 98) {
-              const satLossFrac = (sPct - newS) / sPct;
-              compL = Math.min(100, lPct + satLossFrac * 12);
+            // Convert back to Cartesian OKLAB
+            const newA = newChroma * Math.cos(newHueRad);
+            const newB = newChroma * Math.sin(newHueRad);
+
+            // ── Gamut-aware soft clipping ──
+            // Check if the shifted colour is in gamut
+            const nl_ = MI2_00 * okL + MI2_01 * newA + MI2_02 * newB;
+            const nm_ = MI2_10 * okL + MI2_11 * newA + MI2_12 * newB;
+            const ns_ = MI2_20 * okL + MI2_21 * newA + MI2_22 * newB;
+            const nl = nl_ * nl_ * nl_;
+            const nm = nm_ * nm_ * nm_;
+            const nv = ns_ * ns_ * ns_;
+            const nr = MI1_00 * nl + MI1_01 * nm + MI1_02 * nv;
+            const ng = MI1_10 * nl + MI1_11 * nm + MI1_12 * nv;
+            const nb = MI1_20 * nl + MI1_21 * nm + MI1_22 * nv;
+
+            let finalA = newA;
+            let finalB = newB;
+
+            if (nr < -0.001 || nr > 1.001 || ng < -0.001 || ng > 1.001 || nb < -0.001 || nb > 1.001) {
+              // Out of gamut — compress chroma toward boundary
+              let lo = 0;
+              let hi = newChroma;
+              for (let gi = 0; gi < 20; gi++) {
+                const mid = (lo + hi) * 0.5;
+                const ca = mid * Math.cos(newHueRad);
+                const cb = mid * Math.sin(newHueRad);
+                const gl_ = MI2_00 * okL + MI2_01 * ca + MI2_02 * cb;
+                const gm_ = MI2_10 * okL + MI2_11 * ca + MI2_12 * cb;
+                const gs_ = MI2_20 * okL + MI2_21 * ca + MI2_22 * cb;
+                const gl = gl_ * gl_ * gl_;
+                const gm = gm_ * gm_ * gm_;
+                const gv = gs_ * gs_ * gs_;
+                const gr = MI1_00 * gl + MI1_01 * gm + MI1_02 * gv;
+                const gg = MI1_10 * gl + MI1_11 * gm + MI1_12 * gv;
+                const gb = MI1_20 * gl + MI1_21 * gm + MI1_22 * gv;
+
+                if (gr < -0.0001 || gr > 1.0001 || gg < -0.0001 || gg > 1.0001 || gb < -0.0001 || gb > 1.0001) {
+                  hi = mid;
+                } else {
+                  lo = mid;
+                }
+              }
+
+              // Soft compression: use perceptual curve
+              const maxC = lo;
+              if (maxC > 0.0001) {
+                const compressed = maxC * (2 * newChroma / (newChroma + maxC));
+                finalA = compressed * Math.cos(newHueRad);
+                finalB = compressed * Math.sin(newHueRad);
+              } else {
+                finalA = 0;
+                finalB = 0;
+              }
             }
 
-            // Inline HSL to RGB
-            const hNorm = newH / 360;
-            const sNorm = newS / 100;
-            const lNorm = compL / 100;
-
-            if (sNorm !== 0) {
-              const q2 = lNorm < 0.5 ? lNorm * (1 + sNorm) : lNorm + sNorm - lNorm * sNorm;
-              const p2 = 2 * lNorm - q2;
-
-              let t1 = hNorm + 1 / 3;
-              if (t1 < 0) t1 += 1;
-              if (t1 > 1) t1 -= 1;
-              if (t1 < 1 / 6) rOut = p2 + (q2 - p2) * 6 * t1;
-              else if (t1 < 0.5) rOut = q2;
-              else if (t1 < 2 / 3) rOut = p2 + (q2 - p2) * (2 / 3 - t1) * 6;
-              else rOut = p2;
-
-              let t2 = hNorm;
-              if (t2 < 0) t2 += 1;
-              if (t2 > 1) t2 -= 1;
-              if (t2 < 1 / 6) gOut = p2 + (q2 - p2) * 6 * t2;
-              else if (t2 < 0.5) gOut = q2;
-              else if (t2 < 2 / 3) gOut = p2 + (q2 - p2) * (2 / 3 - t2) * 6;
-              else gOut = p2;
-
-              let t3 = hNorm - 1 / 3;
-              if (t3 < 0) t3 += 1;
-              if (t3 > 1) t3 -= 1;
-              if (t3 < 1 / 6) bOut = p2 + (q2 - p2) * 6 * t3;
-              else if (t3 < 0.5) bOut = q2;
-              else if (t3 < 2 / 3) bOut = p2 + (q2 - p2) * (2 / 3 - t3) * 6;
-              else bOut = p2;
-            } else {
-              rOut = lNorm;
-              gOut = lNorm;
-              bOut = lNorm;
-            }
+            // Inline OKLAB → Linear RGB
+            const fl_ = MI2_00 * okL + MI2_01 * finalA + MI2_02 * finalB;
+            const fm_ = MI2_10 * okL + MI2_11 * finalA + MI2_12 * finalB;
+            const fs_ = MI2_20 * okL + MI2_21 * finalA + MI2_22 * finalB;
+            const fl = fl_ * fl_ * fl_;
+            const fm = fm_ * fm_ * fm_;
+            const fsv = fs_ * fs_ * fs_;
+            rOut = MI1_00 * fl + MI1_01 * fm + MI1_02 * fsv;
+            gOut = MI1_10 * fl + MI1_11 * fm + MI1_12 * fsv;
+            bOut = MI1_20 * fl + MI1_21 * fm + MI1_22 * fsv;
           }
         }
 
-        // CL grid (chroma/lum shifts)
-        if (hasCL && sPct >= 3) {
-          // Re-derive HSL if AB grid modified values
-          let curS: number;
-          let curL: number;
-          let curH: number;
+        // ── Step 4: C/L Grid — Chroma / Luminance shaping ──────────────────
+        if (hasCL) {
+          // Re-derive OKLAB if AB grid modified values
+          let curA: number, curB: number, curL: number, curChroma: number;
 
-          if (hasAB) {
-            const cMax2 = rOut > gOut ? (rOut > bOut ? rOut : bOut) : (gOut > bOut ? gOut : bOut);
-            const cMin2 = rOut < gOut ? (rOut < bOut ? rOut : bOut) : (gOut < bOut ? gOut : bOut);
-            curL = (cMax2 + cMin2) * 0.5;
-
-            if (cMax2 !== cMin2) {
-              const d2 = cMax2 - cMin2;
-              curS = curL > 0.5 ? d2 / (2 - cMax2 - cMin2) : d2 / (cMax2 + cMin2);
-              if (cMax2 === rOut) curH = ((gOut - bOut) / d2 + (gOut < bOut ? 6 : 0)) / 6;
-              else if (cMax2 === gOut) curH = ((bOut - rOut) / d2 + 2) / 6;
-              else curH = ((rOut - gOut) / d2 + 4) / 6;
-            } else {
-              curS = 0;
-              curH = 0;
-            }
+          if (hasAB && totalWeight > 0) {
+            // Already in modified OKLAB space from AB grid
+            // Re-derive from current rOut, gOut, bOut
+            const rl = M1_00 * rOut + M1_01 * gOut + M1_02 * bOut;
+            const rm = M1_10 * rOut + M1_11 * gOut + M1_12 * bOut;
+            const rs = M1_20 * rOut + M1_21 * gOut + M1_22 * bOut;
+            const rl_ = Math.cbrt(rl);
+            const rm_ = Math.cbrt(rm);
+            const rs_ = Math.cbrt(rs);
+            curL = M2_00 * rl_ + M2_01 * rm_ + M2_02 * rs_;
+            curA = M2_10 * rl_ + M2_11 * rm_ + M2_12 * rs_;
+            curB = M2_20 * rl_ + M2_21 * rm_ + M2_22 * rs_;
+            curChroma = Math.sqrt(curA * curA + curB * curB);
           } else {
-            curH = h;
-            curS = s;
-            curL = l;
+            curL = okL;
+            curA = okA;
+            curB = okB;
+            curChroma = okChroma;
           }
 
-          const curSPct = curS * 100;
+          const curChromaPct = curChroma * 500; // Scale to grid units
           const curLPct = curL * 100;
 
-          let totalWeight = 0;
-          let chromaShift = 0;
-          let lumShiftVal = 0;
+          if (curChromaPct >= 1.5) { // Skip near-achromatic
+            let clTotalWeight = 0;
+            let clChromaShift = 0;
+            let clLumShift = 0;
 
-          for (let n = 0; n < clCount; n++) {
-            const chromaDist = curSPct - clChromas[n];
-            const absChromaDist = chromaDist < 0 ? -chromaDist : chromaDist;
+            for (let n = 0; n < clCount; n++) {
+              const chromaDist = curChromaPct - clChromas[n];
+              const absChromaDist = chromaDist < 0 ? -chromaDist : chromaDist;
+              const lumDist = curLPct - clLums[n];
+              const absLumDist = lumDist < 0 ? -lumDist : lumDist;
 
-            const lumDist = curLPct - clLums[n];
-            const absLumDist = lumDist < 0 ? -lumDist : lumDist;
+              const distSq = absChromaDist * absChromaDist + absLumDist * absLumDist;
+              const weight = Math.exp(-distSq * CL_INV_2SIGMA2);
 
-            const distSq = absChromaDist * absChromaDist + absLumDist * absLumDist;
-            const weight = Math.exp(-distSq * CL_INV_2SIGMA2);
-
-            totalWeight += weight;
-            chromaShift += clOffX[n] * weight;
-            lumShiftVal += clOffY[n] * weight;
-          }
-
-          if (totalWeight > 0) {
-            chromaShift /= totalWeight;
-            lumShiftVal /= totalWeight;
-
-            let newS2 = curSPct + chromaShift;
-            if (newS2 < 0) newS2 = 0;
-            else if (newS2 > 100) newS2 = 100;
-
-            let newL2 = curLPct + lumShiftVal;
-            if (newL2 < 0) newL2 = 0;
-            else if (newL2 > 100) newL2 = 100;
-
-            // ── Lightness compensation when saturation decreases ──
-            if (newS2 < curSPct && curSPct > 1 && newL2 > 2 && newL2 < 98) {
-              const satLossFrac = (curSPct - newS2) / curSPct;
-              newL2 = Math.min(100, newL2 + satLossFrac * 12);
+              clTotalWeight += weight;
+              clChromaShift += clOffX[n] * weight;
+              clLumShift += clOffY[n] * weight;
             }
 
-            // Inline HSL to RGB for CL result
-            const hDeg2 = curH * 360;
-            const hNorm2 = hDeg2 / 360;
-            const sNorm2 = newS2 / 100;
-            const lNorm2 = newL2 / 100;
+            if (clTotalWeight > 0) {
+              clChromaShift /= clTotalWeight;
+              clLumShift /= clTotalWeight;
 
-            if (sNorm2 !== 0) {
-              const q2 = lNorm2 < 0.5 ? lNorm2 * (1 + sNorm2) : lNorm2 + sNorm2 - lNorm2 * sNorm2;
-              const p2 = 2 * lNorm2 - q2;
+              // Apply chroma shift (additive in OKLAB chroma space)
+              let newCLChroma = curChroma + clChromaShift * 0.004; // Scale back from grid units
+              if (newCLChroma < 0) newCLChroma = 0;
 
-              let t1 = hNorm2 + 1 / 3;
-              if (t1 < 0) t1 += 1;
-              if (t1 > 1) t1 -= 1;
-              if (t1 < 1 / 6) rOut = p2 + (q2 - p2) * 6 * t1;
-              else if (t1 < 0.5) rOut = q2;
-              else if (t1 < 2 / 3) rOut = p2 + (q2 - p2) * (2 / 3 - t1) * 6;
-              else rOut = p2;
+              // Apply luminance shift
+              let newCLLum = curL + clLumShift * 0.01;
+              if (newCLLum < 0) newCLLum = 0;
+              if (newCLLum > 1) newCLLum = 1;
 
-              let t2 = hNorm2;
-              if (t2 < 0) t2 += 1;
-              if (t2 > 1) t2 -= 1;
-              if (t2 < 1 / 6) gOut = p2 + (q2 - p2) * 6 * t2;
-              else if (t2 < 0.5) gOut = q2;
-              else if (t2 < 2 / 3) gOut = p2 + (q2 - p2) * (2 / 3 - t2) * 6;
-              else gOut = p2;
+              // Preserve hue direction from current a,b
+              const hueAngle = Math.atan2(curB, curA);
+              const finalCLA = newCLChroma * Math.cos(hueAngle);
+              const finalCLB = newCLChroma * Math.sin(hueAngle);
 
-              let t3 = hNorm2 - 1 / 3;
-              if (t3 < 0) t3 += 1;
-              if (t3 > 1) t3 -= 1;
-              if (t3 < 1 / 6) bOut = p2 + (q2 - p2) * 6 * t3;
-              else if (t3 < 0.5) bOut = q2;
-              else if (t3 < 2 / 3) bOut = p2 + (q2 - p2) * (2 / 3 - t3) * 6;
-              else bOut = p2;
-            } else {
-              rOut = lNorm2;
-              gOut = lNorm2;
-              bOut = lNorm2;
+              // Inline OKLAB → Linear RGB
+              const cl_l_ = MI2_00 * newCLLum + MI2_01 * finalCLA + MI2_02 * finalCLB;
+              const cl_m_ = MI2_10 * newCLLum + MI2_11 * finalCLA + MI2_12 * finalCLB;
+              const cl_s_ = MI2_20 * newCLLum + MI2_21 * finalCLA + MI2_22 * finalCLB;
+              const cl_l = cl_l_ * cl_l_ * cl_l_;
+              const cl_m = cl_m_ * cl_m_ * cl_m_;
+              const cl_s = cl_s_ * cl_s_ * cl_s_;
+              const clR = MI1_00 * cl_l + MI1_01 * cl_m + MI1_02 * cl_s;
+              const clG = MI1_10 * cl_l + MI1_11 * cl_m + MI1_12 * cl_s;
+              const clB = MI1_20 * cl_l + MI1_21 * cl_m + MI1_22 * cl_s;
+
+              // Soft gamut clip for CL result
+              rOut = clR < 0 ? clR * 0.1 : clR > 1 ? 1 + (clR - 1) * 0.1 : clR;
+              gOut = clG < 0 ? clG * 0.1 : clG > 1 ? 1 + (clG - 1) * 0.1 : clG;
+              bOut = clB < 0 ? clB * 0.1 : clB > 1 ? 1 + (clB - 1) * 0.1 : clB;
             }
           }
         }
       }
-      // If cMax === cMin (grayscale), no grid processing needed
     }
 
     // ── Step 5: Intensity blending ──
