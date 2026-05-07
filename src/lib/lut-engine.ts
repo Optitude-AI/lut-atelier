@@ -595,7 +595,7 @@ export function generateCubeLUT(
   const lines: string[] = [];
 
   // Header
-  lines.push('# Created by LUT Atelier');
+  lines.push('# Created by Chroma Forge');
   lines.push(`TITLE "${name.replace(/"/g, '\\"')}"`);
   lines.push('DOMAIN_MIN 0.0 0.0 0.0');
   lines.push('DOMAIN_MAX 1.0 1.0 1.0');

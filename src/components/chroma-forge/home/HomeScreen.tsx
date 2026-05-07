@@ -180,7 +180,7 @@ export default function HomeScreen() {
 
             <h1 className="text-5xl lg:text-7xl font-bold tracking-tight mb-6">
               <span className="bg-gradient-to-r from-amber-300 via-orange-200 to-rose-300 bg-clip-text text-transparent">
-                LUT Atelier
+                Chroma Forge
               </span>
             </h1>
 
@@ -371,7 +371,7 @@ export default function HomeScreen() {
         <div className="max-w-6xl mx-auto px-6 py-8 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm text-zinc-500">
             <Grid3X3 className="w-4 h-4" />
-            <span className="font-medium text-zinc-400">LUT Atelier</span>
+            <span className="font-medium text-zinc-400">Chroma Forge</span>
             <span>· Built for Photographers</span>
           </div>
           <div className="flex items-center gap-4 text-xs text-zinc-600">

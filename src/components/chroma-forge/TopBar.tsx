@@ -169,7 +169,7 @@ export default function TopBar() {
           onClick={() => setViewMode('home')}
         >
           <Grid3X3 className="w-4 h-4 mr-1.5 text-amber-400" />
-          <span className="text-sm font-semibold tracking-tight hidden sm:inline">LUT Atelier</span>
+          <span className="text-sm font-semibold tracking-tight hidden sm:inline">Chroma Forge</span>
         </Button>
 
         <div className="w-px h-6 bg-zinc-800 mx-0.5" />

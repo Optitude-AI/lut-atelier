@@ -62,10 +62,10 @@ const integrations: IntegrationConfig[] = [
     steps: [
       {
         label: 'Send from Photoshop',
-        detail: 'Select your image in Photoshop, then use Edit In > LUT Atelier to send the current layer for grading.',
+        detail: 'Select your image in Photoshop, then use Edit In > Chroma Forge to send the current layer for grading.',
       },
       {
-        label: 'Grade in LUT Atelier',
+        label: 'Grade in Chroma Forge',
         detail: 'Apply your color adjustments using the A/B Grid, C/L Grid, curves, and other tools.',
       },
       {
@@ -100,10 +100,10 @@ const integrations: IntegrationConfig[] = [
     steps: [
       {
         label: 'Export from Lightroom',
-        detail: 'Right-click your image in Lightroom and choose Edit In > LUT Atelier to start editing.',
+        detail: 'Right-click your image in Lightroom and choose Edit In > Chroma Forge to start editing.',
       },
       {
-        label: 'Grade in LUT Atelier',
+        label: 'Grade in Chroma Forge',
         detail: 'Fine-tune colors using the professional grading tools and real-time preview.',
       },
       {
@@ -138,11 +138,11 @@ const integrations: IntegrationConfig[] = [
     steps: [
       {
         label: 'Configure external editor',
-        detail: 'In Capture One, go to Edit > Preferences > External Editors and add LUT Atelier as an external application.',
+        detail: 'In Capture One, go to Edit > Preferences > External Editors and add Chroma Forge as an external application.',
       },
       {
-        label: 'Grade in LUT Atelier',
-        detail: 'Images sent from Capture One open directly in LUT Atelier for color grading.',
+        label: 'Grade in Chroma Forge',
+        detail: 'Images sent from Capture One open directly in Chroma Forge for color grading.',
       },
       {
         label: 'Return to Capture One',

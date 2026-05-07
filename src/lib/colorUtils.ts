@@ -1,4 +1,4 @@
-// Color space conversion utilities for LUT Atelier
+// Color space conversion utilities for Chroma Forge
 
 // HSL to RGB conversion
 export function hslToRgb(h: number, s: number, l: number): [number, number, number] {

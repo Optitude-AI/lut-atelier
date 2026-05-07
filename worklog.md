@@ -85,3 +85,26 @@ Stage Summary:
   6. Hydration error → Already fixed in previous session
 - No new lint errors introduced
 - Dev server compiles cleanly
+
+---
+Task ID: 9
+Agent: Main
+Task: Rename application from "LUT Atelier" to "Chroma Forge"
+
+Work Log:
+- Renamed component folder `src/components/lut-atelier` → `src/components/chroma-forge`
+- Updated import paths in `src/app/page.tsx` (2 imports)
+- Updated display text in `HomeScreen.tsx` (hero title + footer brand name)
+- Updated display text in `TopBar.tsx` (app logo/name in top bar)
+- Updated display text in `IntegrationsPanel.tsx` (6 references across Photoshop, Lightroom, Capture One sections)
+- Updated LUT file header comment in `lut-engine.ts` ("# Created by Chroma Forge")
+- Updated code comment in `colorUtils.ts`
+- Updated download filename in `LookManager.tsx` (`chroma-forge-looks-*.json`)
+- Updated `layout.tsx` metadata: title, description, keywords
+- Verified zero remaining "LUT Atelier" or "lut-atelier" references in src/
+- Dev server compiles cleanly
+
+Stage Summary:
+- Complete rebrand from "LUT Atelier" to "Chroma Forge"
+- 12 edits across 8 files + 1 folder rename
+- All user-facing text, metadata, file exports, and code comments updated
