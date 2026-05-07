@@ -309,7 +309,9 @@ export function rgbToHsl(r: number, g: number, b: number): [number, number, numb
 /**
  * Interpolate hue/saturation shift from A/B grid nodes.
  * Returns [hueShift, saturationShift] based on inverse-distance weighting.
- * Offsets in the A/B grid: X = hue shift (degrees), Y = saturation shift (%).
+ * Offsets in the A/B grid: X = hue shift (degrees), Y = saturation shift (% multiplicative).
+ * saturationShift is applied as: newS = s * (1 + satShift / 100)
+ * This makes changes proportional — low-sat pixels won't clamp to 0.
  */
 export function interpolateABGrid(
   nodes: GridNode[],
@@ -522,7 +524,8 @@ export function applyColorGradePixel(
     let newH = h + hueShift;
     // Wrap hue to 0-360
     newH = ((newH % 360) + 360) % 360;
-    const newS = Math.max(0, Math.min(100, s + satShift));
+    // Multiplicative saturation: proportional change, preserves low-sat pixels
+    const newS = Math.max(0, Math.min(100, s * (1 + satShift / 100)));
 
     const [abR, abG, abB] = hslToRgb(newH, newS, l);
     rOut = abR;
@@ -732,7 +735,9 @@ export function processImagePixels(
         const [hueShift, satShift] = interpolateABGrid(abNodes!, h, s, l);
         let newH = h + hueShift;
         newH = ((newH % 360) + 360) % 360;
-        const newS = s + satShift < 0 ? 0 : s + satShift > 100 ? 100 : s + satShift;
+        // Multiplicative saturation: proportional change
+        const rawS = s * (1 + satShift / 100);
+        const newS = rawS < 0 ? 0 : rawS > 100 ? 100 : rawS;
 
         const [abR, abG, abB] = hslToRgb(newH, newS, l);
         rOut = abR;
@@ -1041,7 +1046,8 @@ export function processImagePixelsFast(
             newH = newH % 360;
             if (newH < 0) newH += 360;
 
-            let newS = sPct + satShift;
+            // Multiplicative saturation: proportional change, preserves low-sat pixels
+            let newS = sPct * (1 + satShift / 100);
             if (newS < 0) newS = 0;
             else if (newS > 100) newS = 100;
 

@@ -352,10 +352,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       chroma: n.chroma,
       luminance: n.luminance,
       // Pixel offset → colour-space offset (scale relative to circle radius)
-      // Conservative multipliers: full drag ≈ 30% chroma shift, 15% luminance shift
-      // Luminance kept low to avoid unwanted contrast/brightness changes
+      // Chroma: full drag ≈ 30% chroma shift
+      // Luminance: reduced to 8% max to minimize unwanted contrast/brightness changes
       offsetX: Math.round((n.offsetX / circleR) * 300) / 10,
-      offsetY: Math.round(-(n.offsetY / circleR) * 150) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 80) / 10,
     }));
 
     useAppStore.getState().setCLNodes(storeNodes);

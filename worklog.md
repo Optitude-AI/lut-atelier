@@ -527,3 +527,26 @@ Stage Summary:
 - CLGrid contrast changes dramatically reduced: luminance 60%→15%, chroma 60%→30%
 - LUT switching now easy: "None / Original" card at top of LUT browser, active LUT badge with X in image viewer
 - All lint errors resolved (0 errors, only 4 pre-existing warnings in ScopesPanel)
+
+---
+Task ID: 14
+Agent: Main Orchestrator
+Task: Fix AB grid (Hue/Saturation) causing background darkening/contrast change
+
+Work Log:
+- Diagnosed root cause: saturation shift was applied ADDITIVELY (s + satShift), causing low-saturation background pixels to clamp to 0 (pure gray), appearing darker
+- Changed saturation shift to MULTIPLICATIVE in lut-engine.ts: `newS = s * (1 + satShift / 100)` in 3 locations:
+  - applyColorGradePixel (single-pixel path)
+  - processImagePixels (standard processing path)
+  - processImagePixelsFast (optimized processing path)
+- Multiplicative approach ensures changes are proportional — low-sat pixels get smaller absolute changes and never clamp to 0
+- Reduced AB grid saturation multiplier from 350 (35% absolute) to 250 (25% multiplicative) in ABGrid.tsx
+- Reduced CL grid luminance multiplier from 150 (15%) to 80 (8%) in CLGrid.tsx to further minimize unwanted contrast changes
+- Verified hydration suppressHydrationWarning already exists in layout.tsx (both html and body)
+- Verified app compiles cleanly with zero new lint errors
+
+Stage Summary:
+- AB grid (Hue/Sat) now changes COLORS without darkening the background — multiplicative saturation preserves low-sat pixels
+- CL grid (Chroma/Lum) luminance influence reduced from 15% to 8% max for subtler contrast control
+- Three code paths in lut-engine.ts updated consistently for multiplicative saturation
+- Hydration error already handled by layout.tsx suppressHydrationWarning
