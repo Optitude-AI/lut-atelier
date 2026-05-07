@@ -153,8 +153,8 @@ export function buildABNodeArrays(nodes: GridNode[]): ABNodeArrays {
       lums[idx] = n.lightness;
       offsetXs[idx] = n.offsetX;
       offsetYs[idx] = n.offsetY;
-      hueSigmas[idx] = n.hueSigma || 0;   // 0 means "use global default"
-      satSigmas[idx] = n.satSigma || 0;    // 0 means "use global default"
+      hueSigmas[idx] = n.hueSigma || n.abHueSigma || 0;   // 0 means "use global default"
+      satSigmas[idx] = n.satSigma || n.abSatSigma || 0;    // 0 means "use global default"
       sigmaMults[idx] = n.sigmaMult || 1.0; // default multiplier
       idx++;
     }
@@ -336,8 +336,8 @@ export function interpolateABGrid(
   h: number,
   s: number,
   l: number,
-  globalHueSigma: number = 65,
-  globalSatSigma: number = 65,
+  globalHueSigma: number = 25,
+  globalSatSigma: number = 18,
 ): [number, number] {
   // Skip for very low saturation or lightness extremes
   if (s < 5 || l < 3 || l > 97) return [0, 0];
@@ -907,10 +907,6 @@ export function processImagePixelsFast(
   const abSigmaMults = abData.sigmaMults;
   const abCount = abData.count;
 
-  // Global AB sigma values (with fallback to 65 for backward compat)
-  const AB_GLOBAL_HUE_SIGMA = params.abGlobalHueSigma || 65;
-  const AB_GLOBAL_SAT_SIGMA = params.abGlobalSatSigma || 65;
-
   // CL node typed arrays
   const hasCL = clData.count > 0;
   const clChromas = clData.chromas;
@@ -921,6 +917,12 @@ export function processImagePixelsFast(
 
   // Pre-compute 1/(2*sigma^2) for CL grid (AB uses per-node anisotropic sigma)
   const CL_INV_2SIGMA2 = 1 / (2 * 40 * 40); // sigma = 40
+
+  // AB global sigma: use params if provided, otherwise reasonable defaults
+  // 25° hue sigma gives good selectivity between 22.5° branches
+  // 18% sat sigma gives good selectivity between ring positions
+  const AB_GLOBAL_HUE_SIGMA = params.abGlobalHueSigma || 25;
+  const AB_GLOBAL_SAT_SIGMA = params.abGlobalSatSigma || 18;
 
   // Check if LUTs are identity (avoid unnecessary work)
   const hasMasterCurve = masterLUT !== rLUT; // heuristic: if they differ, master was custom-built

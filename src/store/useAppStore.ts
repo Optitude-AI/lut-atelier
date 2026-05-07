@@ -603,8 +603,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     showGamutWarnings: true,
     curveResolution: 256,
     interpolationMode: 'cubic',
-    abHueSigma: 65,
-    abSatSigma: 65,
+    abHueSigma: 25,
+    abSatSigma: 18,
   },
   updateSettings: (settings) => set((state) => ({
     settings: { ...state.settings, ...settings },

@@ -173,3 +173,32 @@ Stage Summary:
 - AB grid now supports anisotropic Gaussian falloff with per-node hue/sat sigma overrides and sigma multiplier
 - Backward compatible: all defaults match previous behavior (sigma=65 for both hue and sat)
 - Ready for store/grid UI agents to wire up the new per-node controls
+---
+Task ID: 1
+Agent: main
+Task: Fix AB Grid bugs — contrast increase on node movement + center reset not working
+
+Work Log:
+- Diagnosed root cause: sigma values (65 for both hue and saturation) were way too large
+  - Hue sigma=65°: affects pixels 90° away with 38% weight → nearly global influence
+  - Sat sigma=65%: affects ALL saturation levels with 74%+ weight → uniform saturation change
+  - Combined with multiplicative saturation formula, this looked like global contrast increase
+- Found property name mismatch: buildABNodeArrays used n.hueSigma/n.satSigma but store has n.abHueSigma/n.abSatSigma
+- Found settings.abHueSigma/abSatSigma were never passed from ImageViewer to the engine
+- Store default sigma values were 65 (matching the incorrect engine defaults)
+
+Stage Summary:
+- Reduced engine sigma defaults from 65→25 (hue) and 65→18 (saturation)
+  - 25° hue sigma: good selectivity between 22.5° branch spacing
+  - 18% sat sigma: good selectivity between ring positions (22%, 44%, 70%, 100%)
+- Fixed buildABNodeArrays to check both hueSigma and abHueSigma property names
+- Updated ImageViewer to pass settings.abHueSigma and settings.abSatSigma to processImagePixelsFast
+- Added settings to processGradedImage dependency array
+- Updated store defaults: abHueSigma=25, abSatSigma=18
+- Verified double-click center reset logic is correct — issue was the sigma causing visible artifacts
+- All changes compile cleanly, no lint errors in source files
+
+Files modified:
+- src/lib/lut-engine.ts (sigma defaults, property name fix)
+- src/components/chroma-forge/ImageViewer.tsx (pass sigma settings to engine)
+- src/store/useAppStore.ts (update default sigma values)

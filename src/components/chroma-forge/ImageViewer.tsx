@@ -362,6 +362,8 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       abNodes: abArrays,
       clNodes: clArrays,
       globalIntensity,
+      abGlobalHueSigma: settings.abHueSigma,
+      abGlobalSatSigma: settings.abSatSigma,
     });
 
     ctx.putImageData(imageData, 0, 0);
@@ -378,7 +380,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
         setGradedUrl(url);
       }
     }, 'image/png');
-  }, [curveData, channelData, abNodes, clNodes, globalIntensity, setGradedUrl]);
+  }, [curveData, channelData, abNodes, clNodes, globalIntensity, settings, setGradedUrl]);
 
   // Keep ref in sync so image-load effect can call latest version
   useEffect(() => {
