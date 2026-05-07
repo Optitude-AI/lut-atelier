@@ -340,7 +340,7 @@ export function interpolateABGrid(
     const dist = Math.sqrt(hueDist * hueDist + satDist * satDist);
 
     // Inverse distance weight with minimum distance to avoid division by zero
-    const sigma = 50; // Wider spread for smoother, more gradual color transitions
+    const sigma = 35; // Tighter spread so effects stay localized to the targeted color region
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -386,7 +386,7 @@ export function interpolateCLGrid(
     const dist = Math.sqrt(chromaDist * chromaDist + lumDist * lumDist);
 
     // Inverse distance weight with Gaussian falloff
-    const sigma = 45; // Wider spread for smoother, more gradual transitions
+    const sigma = 30; // Tighter spread so effects stay localized to the targeted chroma/lum region
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -527,7 +527,16 @@ export function applyColorGradePixel(
     // Multiplicative saturation: proportional change, preserves low-sat pixels
     const newS = Math.max(0, Math.min(100, s * (1 + satShift / 100)));
 
-    const [abR, abG, abB] = hslToRgb(newH, newS, l);
+    // ── Lightness compensation ──
+    // Reducing HSL saturation causes perceived darkening (Helmholtz-Kohlrausch effect).
+    // When saturation decreases, bump lightness proportionally to maintain perceived brightness.
+    let compL = l;
+    if (newS < s && s > 1 && l > 2 && l < 98) {
+      const satLossFrac = (s - newS) / s; // 0..1
+      compL = Math.min(100, l + satLossFrac * 10);
+    }
+
+    const [abR, abG, abB] = hslToRgb(newH, newS, compL);
     rOut = abR;
     gOut = abG;
     bOut = abB;
@@ -540,7 +549,13 @@ export function applyColorGradePixel(
   if (clNodes && clNodes.length > 0) {
     const [chromaShift, lumShift] = interpolateCLGrid(clNodes, h2, s2, l2);
     const newS2 = Math.max(0, Math.min(100, s2 + chromaShift));
-    const newL2 = Math.max(0, Math.min(100, l2 + lumShift));
+    let newL2 = Math.max(0, Math.min(100, l2 + lumShift));
+
+    // ── Lightness compensation when saturation decreases ──
+    if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
+      const satLossFrac = (s2 - newS2) / s2;
+      newL2 = Math.min(100, newL2 + satLossFrac * 10);
+    }
 
     const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
     rOut = clR;
@@ -739,7 +754,14 @@ export function processImagePixels(
         const rawS = s * (1 + satShift / 100);
         const newS = rawS < 0 ? 0 : rawS > 100 ? 100 : rawS;
 
-        const [abR, abG, abB] = hslToRgb(newH, newS, l);
+        // ── Lightness compensation when saturation decreases ──
+        let abL = l;
+        if (newS < s && s > 1 && l > 2 && l < 98) {
+          const satLossFrac = (s - newS) / s;
+          abL = Math.min(100, l + satLossFrac * 10);
+        }
+
+        const [abR, abG, abB] = hslToRgb(newH, newS, abL);
         rOut = abR;
         gOut = abG;
         bOut = abB;
@@ -758,7 +780,13 @@ export function processImagePixels(
 
         const [chromaShift, lumShift] = interpolateCLGrid(clNodes!, h2, s2, l2);
         const newS2 = s2 + chromaShift < 0 ? 0 : s2 + chromaShift > 100 ? 100 : s2 + chromaShift;
-        const newL2 = l2 + lumShift < 0 ? 0 : l2 + lumShift > 100 ? 100 : l2 + lumShift;
+        let newL2 = l2 + lumShift < 0 ? 0 : l2 + lumShift > 100 ? 100 : l2 + lumShift;
+
+        // ── Lightness compensation when saturation decreases ──
+        if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
+          const satLossFrac = (s2 - newS2) / s2;
+          newL2 = Math.min(100, newL2 + satLossFrac * 10);
+        }
 
         const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
         rOut = clR;
@@ -862,9 +890,9 @@ export function processImagePixelsFast(
   const clOffY = clData.offsetYs;
   const clCount = clData.count;
 
-  // Pre-compute 1/(2*sigma^2) for AB and CL grids (wider sigma = smoother transitions)
-  const AB_INV_2SIGMA2 = 1 / (2 * 50 * 50); // sigma = 50
-  const CL_INV_2SIGMA2 = 1 / (2 * 45 * 45); // sigma = 45
+  // Pre-compute 1/(2*sigma^2) for AB and CL grids (tighter sigma = more localized effects)
+  const AB_INV_2SIGMA2 = 1 / (2 * 35 * 35); // sigma = 35
+  const CL_INV_2SIGMA2 = 1 / (2 * 30 * 30); // sigma = 30
 
   // Check if LUTs are identity (avoid unnecessary work)
   const hasMasterCurve = masterLUT !== rLUT; // heuristic: if they differ, master was custom-built
@@ -1051,10 +1079,17 @@ export function processImagePixelsFast(
             if (newS < 0) newS = 0;
             else if (newS > 100) newS = 100;
 
+            // ── Lightness compensation when saturation decreases ──
+            let compL = lPct;
+            if (newS < sPct && sPct > 1 && lPct > 2 && lPct < 98) {
+              const satLossFrac = (sPct - newS) / sPct;
+              compL = Math.min(100, lPct + satLossFrac * 10);
+            }
+
             // Inline HSL to RGB
             const hNorm = newH / 360;
             const sNorm = newS / 100;
-            const lNorm = lPct / 100;
+            const lNorm = compL / 100;
 
             if (sNorm !== 0) {
               const q2 = lNorm < 0.5 ? lNorm * (1 + sNorm) : lNorm + sNorm - lNorm * sNorm;
@@ -1152,6 +1187,12 @@ export function processImagePixelsFast(
             let newL2 = curLPct + lumShiftVal;
             if (newL2 < 0) newL2 = 0;
             else if (newL2 > 100) newL2 = 100;
+
+            // ── Lightness compensation when saturation decreases ──
+            if (newS2 < curSPct && curSPct > 1 && newL2 > 2 && newL2 < 98) {
+              const satLossFrac = (curSPct - newS2) / curSPct;
+              newL2 = Math.min(100, newL2 + satLossFrac * 10);
+            }
 
             // Inline HSL to RGB for CL result
             const hDeg2 = curH * 360;

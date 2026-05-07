@@ -331,7 +331,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     (w: number, h: number) => {
       const cx = w / 2;
       const cy = h / 2;
-      const circleR = (Math.min(w, h) / 2) * 0.88;
+      const circleR = (Math.min(w, h) / 2) * 0.95;
       return { cx, cy, circleR };
     },
     [],
@@ -352,10 +352,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       chroma: n.chroma,
       luminance: n.luminance,
       // Pixel offset → colour-space offset (scale relative to circle radius)
-      // Chroma: full drag ≈ 30% chroma shift
-      // Luminance: reduced to 8% max to minimize unwanted contrast/brightness changes
-      offsetX: Math.round((n.offsetX / circleR) * 300) / 10,
-      offsetY: Math.round(-(n.offsetY / circleR) * 80) / 10,
+      // Chroma: full drag ≈ 20% chroma shift (responsive but subtle)
+      // Luminance: reduced to 4% max to minimize unwanted contrast/brightness changes
+      offsetX: Math.round((n.offsetX / circleR) * 200) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 40) / 10,
     }));
 
     useAppStore.getState().setCLNodes(storeNodes);
@@ -722,9 +722,9 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       // Center → affects every node
       for (const n of nodesRef.current) ids.add(n.id);
     } else {
-      // Non-center → same branch only
+      // Non-center → same branch + center node (center anchors the overall shift)
       for (const n of nodesRef.current) {
-        if (n.branch === node.branch) ids.add(n.id);
+        if (n.ring === 0 || n.branch === node.branch) ids.add(n.id);
       }
     }
     return ids;
