@@ -20,6 +20,27 @@ import {
 } from './oklab';
 
 // ─── Inlined OKLAB matrix constants (hot-loop performance) ───
+// Duplicated from oklab.ts to avoid function-call overhead in per-pixel loops.
+
+/** sRGB linear → LMS (cone responses, based on Hunt-Pointer-Estévez) */
+const M1_00 = 0.4122214708, M1_01 = 0.5363325363, M1_02 = 0.0514459929;
+const M1_10 = 0.2119034982, M1_11 = 0.6806995451, M1_12 = 0.1073969566;
+const M1_20 = 0.0883024619, M1_21 = 0.2817188376, M1_22 = 0.6299787005;
+
+/** LMS' → OKLAB */
+const M2_00 = 0.2104542553, M2_01 = 0.7936177850, M2_02 = -0.0040720468;
+const M2_10 = 1.9779984951, M2_11 = -2.4285922050, M2_12 = 0.4505937099;
+const M2_20 = 0.0259040371, M2_21 = 0.7827717662, M2_22 = -0.8086757660;
+
+/** OKLAB → LMS' (inverse of M2) */
+const MI2_00 = 1.0, MI2_01 = 0.3963377774, MI2_02 = 0.2158037573;
+const MI2_10 = 1.0, MI2_11 = -0.1055613458, MI2_12 = -0.0638541728;
+const MI2_20 = 1.0, MI2_21 = -0.0894841775, MI2_22 = -1.2914855480;
+
+/** LMS → sRGB linear (inverse of M1) */
+const MI1_00 = +4.0767416621, MI1_01 = -3.3077115913, MI1_02 = +0.2309699292;
+const MI1_10 = -1.2684380046, MI1_11 = +2.6097574011, MI1_12 = -0.3413193965;
+const MI1_20 = -0.0041960863, MI1_21 = -0.7034186147, MI1_22 = +1.7076147010;
 
 // ─── Types (mirrored from useAppStore for server-side use) ───
 
