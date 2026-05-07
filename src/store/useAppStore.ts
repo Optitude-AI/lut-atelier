@@ -21,6 +21,10 @@ export interface GridNode {
   offsetY: number;
   originalOffsetX?: number;
   originalOffsetY?: number;
+  sigmaMult: number;
+  pinned: boolean;
+  abHueSigma: number;
+  abSatSigma: number;
 }
 
 export interface CLGridNode {
@@ -156,6 +160,8 @@ export interface AppSettings {
   showGamutWarnings: boolean;
   curveResolution: number;
   interpolationMode: 'linear' | 'cubic' | 'smoothstep';
+  abHueSigma: number;
+  abSatSigma: number;
 }
 
 export interface AppStore {
@@ -309,7 +315,7 @@ export interface AppStore {
 
 function generateDefaultABNodes(): GridNode[] {
   const nodes: GridNode[] = [];
-  const keyHues = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+  const keyHues = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
   const keySats = [25, 50, 75];
 
   for (const hue of keyHues) {
@@ -323,6 +329,10 @@ function generateDefaultABNodes(): GridNode[] {
         offsetY: 0,
         originalOffsetX: 0,
         originalOffsetY: 0,
+        sigmaMult: 1.0,
+        pinned: false,
+        abHueSigma: 0,
+        abSatSigma: 0,
       });
     }
   }
@@ -593,6 +603,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     showGamutWarnings: true,
     curveResolution: 256,
     interpolationMode: 'cubic',
+    abHueSigma: 65,
+    abSatSigma: 65,
   },
   updateSettings: (settings) => set((state) => ({
     settings: { ...state.settings, ...settings },

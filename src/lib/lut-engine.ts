@@ -33,6 +33,10 @@ export interface GridNode {
   lightness: number;
   offsetX: number;
   offsetY: number;
+  hueSigma?: number;   // per-node hue sigma override (0 = use global)
+  satSigma?: number;    // per-node sat sigma override (0 = use global)
+  sigmaMult?: number;   // per-node sigma multiplier (default 1.0)
+  pinned?: boolean;     // per-node pin flag
 }
 
 export interface CLGridNode {
@@ -52,6 +56,9 @@ export interface ABNodeArrays {
   lums: Float64Array;
   offsetXs: Float64Array;
   offsetYs: Float64Array;
+  hueSigmas: Float64Array;  // per-node hue sigma (0 = use global)
+  satSigmas: Float64Array;  // per-node sat sigma (0 = use global)
+  sigmaMults: Float64Array; // per-node sigma multiplier
   count: number;
 }
 
@@ -75,6 +82,8 @@ export interface FastGradeParams {
   abNodes: ABNodeArrays;
   clNodes: CLNodeArrays;
   globalIntensity: number;
+  abGlobalHueSigma?: number;  // global AB hue sigma (default 65)
+  abGlobalSatSigma?: number;  // global AB sat sigma (default 65)
 }
 
 // ─── Curve LUT Builder ───
@@ -112,6 +121,9 @@ export function buildABNodeArrays(nodes: GridNode[]): ABNodeArrays {
       lums: new Float64Array(0),
       offsetXs: new Float64Array(0),
       offsetYs: new Float64Array(0),
+      hueSigmas: new Float64Array(0),
+      satSigmas: new Float64Array(0),
+      sigmaMults: new Float64Array(0),
       count: 0,
     };
   }
@@ -128,6 +140,9 @@ export function buildABNodeArrays(nodes: GridNode[]): ABNodeArrays {
   const lums = new Float64Array(activeCount);
   const offsetXs = new Float64Array(activeCount);
   const offsetYs = new Float64Array(activeCount);
+  const hueSigmas = new Float64Array(activeCount);
+  const satSigmas = new Float64Array(activeCount);
+  const sigmaMults = new Float64Array(activeCount);
 
   let idx = 0;
   for (let i = 0; i < nodes.length; i++) {
@@ -138,11 +153,14 @@ export function buildABNodeArrays(nodes: GridNode[]): ABNodeArrays {
       lums[idx] = n.lightness;
       offsetXs[idx] = n.offsetX;
       offsetYs[idx] = n.offsetY;
+      hueSigmas[idx] = n.hueSigma || 0;   // 0 means "use global default"
+      satSigmas[idx] = n.satSigma || 0;    // 0 means "use global default"
+      sigmaMults[idx] = n.sigmaMult || 1.0; // default multiplier
       idx++;
     }
   }
 
-  return { hues, sats, lums, offsetXs, offsetYs, count: activeCount };
+  return { hues, sats, lums, offsetXs, offsetYs, hueSigmas, satSigmas, sigmaMults, count: activeCount };
 }
 
 // ─── CL Node Array Builder ───
@@ -317,7 +335,9 @@ export function interpolateABGrid(
   nodes: GridNode[],
   h: number,
   s: number,
-  l: number
+  l: number,
+  globalHueSigma: number = 65,
+  globalSatSigma: number = 65,
 ): [number, number] {
   // Skip for very low saturation or lightness extremes
   if (s < 5 || l < 3 || l > 97) return [0, 0];
@@ -336,12 +356,14 @@ export function interpolateABGrid(
     // Saturation distance
     const satDist = Math.abs(s - node.saturation);
 
-    // Combined distance — hue + saturation ONLY (no lightness, since this is a hue/sat grid)
-    const dist = Math.sqrt(hueDist * hueDist + satDist * satDist);
+    // Anisotropic falloff: separate hue and saturation sigma per node
+    const effHueSigma = (node.hueSigma && node.hueSigma > 0 ? node.hueSigma : globalHueSigma) * (node.sigmaMult || 1.0);
+    const effSatSigma = (node.satSigma && node.satSigma > 0 ? node.satSigma : globalSatSigma) * (node.sigmaMult || 1.0);
 
-    // Inverse distance weight with minimum distance to avoid division by zero
-    const sigma = 65; // Wide spread — dragging one hue affects a broad, cohesive color family
-    const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
+    const weight = Math.exp(
+      -(hueDist * hueDist) / (2 * effHueSigma * effHueSigma)
+      - (satDist * satDist) / (2 * effSatSigma * effSatSigma)
+    );
 
     totalWeight += weight;
     hueShift += node.offsetX * weight;
@@ -880,7 +902,14 @@ export function processImagePixelsFast(
   const abLums = abData.lums;
   const abOffX = abData.offsetXs;
   const abOffY = abData.offsetYs;
+  const abHueSigmas = abData.hueSigmas;
+  const abSatSigmas = abData.satSigmas;
+  const abSigmaMults = abData.sigmaMults;
   const abCount = abData.count;
+
+  // Global AB sigma values (with fallback to 65 for backward compat)
+  const AB_GLOBAL_HUE_SIGMA = params.abGlobalHueSigma || 65;
+  const AB_GLOBAL_SAT_SIGMA = params.abGlobalSatSigma || 65;
 
   // CL node typed arrays
   const hasCL = clData.count > 0;
@@ -890,8 +919,7 @@ export function processImagePixelsFast(
   const clOffY = clData.offsetYs;
   const clCount = clData.count;
 
-  // Pre-compute 1/(2*sigma^2) for AB and CL grids (wide sigma = cohesive, unified color shifts)
-  const AB_INV_2SIGMA2 = 1 / (2 * 65 * 65); // sigma = 65
+  // Pre-compute 1/(2*sigma^2) for CL grid (AB uses per-node anisotropic sigma)
   const CL_INV_2SIGMA2 = 1 / (2 * 40 * 40); // sigma = 40
 
   // Check if LUTs are identity (avoid unnecessary work)
@@ -1056,10 +1084,16 @@ export function processImagePixelsFast(
             const satDist = sPct - abSats[n];
             const absSatDist = satDist < 0 ? -satDist : satDist;
 
-            // Distance: hue + saturation ONLY — no lightness term
-            // (this is a hue/saturation grid, not a contrast/lightness grid)
-            const distSq = hueDist * hueDist + absSatDist * absSatDist;
-            const weight = Math.exp(-distSq * AB_INV_2SIGMA2);
+            // Per-node anisotropic sigma with global fallback
+            const nodeHueSigma = abHueSigmas[n] > 0 ? abHueSigmas[n] : AB_GLOBAL_HUE_SIGMA;
+            const nodeSatSigma = abSatSigmas[n] > 0 ? abSatSigmas[n] : AB_GLOBAL_SAT_SIGMA;
+            const nodeMult = abSigmaMults[n];
+            const effHueSigma = nodeHueSigma * nodeMult;
+            const effSatSigma = nodeSatSigma * nodeMult;
+            const weight = Math.exp(
+              -(hueDist * hueDist) / (2 * effHueSigma * effHueSigma)
+              - (absSatDist * absSatDist) / (2 * effSatSigma * effSatSigma)
+            );
 
             totalWeight += weight;
             hueShift += abOffX[n] * weight;
