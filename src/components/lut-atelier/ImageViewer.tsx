@@ -366,7 +366,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Use blob URLs + JPEG for fast encoding (much faster than PNG toDataURL)
+    // Use blob URLs + PNG (lossless) to prevent compression artifacts during rapid re-processing
     canvas.toBlob((blob) => {
       if (blob) {
         // Revoke previous blob URL to prevent memory leaks
@@ -377,7 +377,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
         prevBlobUrlRef.current = url;
         setGradedUrl(url);
       }
-    }, 'image/jpeg', 0.92);
+    }, 'image/png');
   }, [curveData, channelData, abNodes, clNodes, globalIntensity, setGradedUrl]);
 
   // Keep ref in sync so image-load effect can call latest version

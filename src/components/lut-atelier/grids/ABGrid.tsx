@@ -38,7 +38,7 @@ const NODE_RADIUS = 4.5;
 const CENTER_RADIUS = 7;
 const HIT_RADIUS = 13;
 const MAX_DRAG_FRAC = 0.25;
-const SIGMA = 3.0;
+const SIGMA = 3.5;
 const TWO_PI = Math.PI * 2;
 const INV_TWO_PI = 1 / TWO_PI;
 

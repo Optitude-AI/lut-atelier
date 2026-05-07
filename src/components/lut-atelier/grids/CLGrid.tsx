@@ -59,9 +59,9 @@ const NODE_HIT_RADIUS = 11;
 const CENTER_HIT_RADIUS = 14;
 const RING_RADIUS_FRACS = [0, 0.22, 0.44, 0.70, 1.0];
 const NUM_SPOKES = 8;
-const FALLOFF_SIGMA = 3.0;
+const FALLOFF_SIGMA = 3.5;
 const MAX_DRAG_FRACTION = 0.25;
-const CL_BG_HUE = 220; // Cool blue — visually distinct from AB grid's warm color wheel
+const CL_BG_HUE = 35; // Warm amber tint — visually distinct from AB grid, communicates warmth-neutral palette
 const DEG = Math.PI / 180;
 const TWO_PI = Math.PI * 2;
 
@@ -403,9 +403,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
             if (angle < 0) angle += TWO_PI;
             const luminance = 50 + 45 * Math.cos(angle);
             const [r, g, b] = hslToRgb(CL_BG_HUE, chroma, luminance);
-            data[idx] = r;
-            data[idx + 1] = g;
-            data[idx + 2] = b;
+            const vig = 1 - (dist / circleR) ** 2 * 0.2;
+            data[idx] = (r * vig) | 0;
+            data[idx + 1] = (g * vig) | 0;
+            data[idx + 2] = (b * vig) | 0;
             data[idx + 3] = 255;
           } else {
             data[idx] = 10;
