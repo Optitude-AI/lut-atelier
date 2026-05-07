@@ -550,3 +550,28 @@ Stage Summary:
 - CL grid (Chroma/Lum) luminance influence reduced from 15% to 8% max for subtler contrast control
 - Three code paths in lut-engine.ts updated consistently for multiplicative saturation
 - Hydration error already handled by layout.tsx suppressHydrationWarning
+
+---
+Task ID: 2
+Agent: Main Orchestrator
+Task: Fix color engine darkening, CL grid visualization, extend net flexibility
+
+Work Log:
+- Diagnosed CL grid "planet/sphere" appearance: single orange hue (CL_BG_HUE=30) + wrapping luminance mapping (angle/2π*100) created 3D sphere illusion. Top of circle was 0% luminance (BLACK) instead of highlights.
+- Fixed CL grid luminance mapping: changed from linear wrap-around `(angle/TWO_PI)*100` to cosine-based `50+45*cos(angle)`. Now TOP=95% (highlights), BOTTOM=5% (shadows), sides=50% (midtones).
+- Changed CL background hue from orange (30°) to cool blue (220°) for visual distinction from AB grid's warm color wheel
+- Removed vignette from CL grid that contributed to sphere illusion
+- Added HIGHLIGHTS/SHADOWS labels to CL grid background
+- Set CL center node luminance to 50 (midtones) instead of 0
+- Added lightness compensation (Helmholtz-Kohlrausch) across all 3 engine paths: when saturation decreases, lightness increases by up to 15% × saturation_loss_fraction to prevent perceived darkening
+- Restored wide Gaussian sigma for cohesive color shifts: AB sigma 35→55, CL sigma 30→40
+- Increased mesh deformation sigma 1.8→3.0 on both grids for unified node movement
+- Increased MAX_DRAG_FRACTION 0.18→0.25 on both grids for more flexibility
+- Restored strong multipliers: AB hue ±50°, sat ±20%; CL chroma ±30%, lum ±8%
+- Ran 28/28 engine tests: hue shifting, saturation with compensation, CL highlight/shadow targeting, intensity blending, combined pipeline, fast path consistency, identity transform, color wheel direction
+
+Stage Summary:
+- CL grid now shows proper chroma/luminance gradient (top=bright, bottom=dark) instead of planet sphere
+- Both grids have extended flexibility with 25% max drag distance and unified mesh movement
+- Color engine produces correct, fluid color changes without darkening
+- All path-of-travel directions correspond correctly to color wheel (AB) and luminance axis (CL)

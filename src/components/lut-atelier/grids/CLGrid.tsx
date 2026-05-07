@@ -60,8 +60,8 @@ const CENTER_HIT_RADIUS = 14;
 const RING_RADIUS_FRACS = [0, 0.22, 0.44, 0.70, 1.0];
 const NUM_SPOKES = 8;
 const FALLOFF_SIGMA = 3.0;
-const MAX_DRAG_FRACTION = 0.18;
-const CL_BG_HUE = 30;
+const MAX_DRAG_FRACTION = 0.25;
+const CL_BG_HUE = 220; // Cool blue — visually distinct from AB grid's warm color wheel
 const DEG = Math.PI / 180;
 const TWO_PI = Math.PI * 2;
 
@@ -124,7 +124,7 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
     offsetX: 0,
     offsetY: 0,
     chroma: 0,
-    luminance: 0,
+    luminance: 50, // Center node targets midtones
   });
 
   // Ring 1 — 8 nodes at 0°, 45°, …, 315°
@@ -146,7 +146,7 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
       offsetX: 0,
       offsetY: 0,
       chroma: rFrac * 100,
-      luminance: (angle / TWO_PI) * 100,
+      luminance: 50 + 45 * Math.cos(angle), // TOP=95% (highlights), BOTTOM=5% (shadows)
     });
   }
 
@@ -169,7 +169,7 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
       offsetX: 0,
       offsetY: 0,
       chroma: rFrac * 100,
-      luminance: (angle / TWO_PI) * 100,
+      luminance: 50 + 45 * Math.cos(angle), // TOP=95% (highlights), BOTTOM=5% (shadows)
     });
   }
 
@@ -192,7 +192,7 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
       offsetX: 0,
       offsetY: 0,
       chroma: rFrac * 100,
-      luminance: (angle / TWO_PI) * 100,
+      luminance: 50 + 45 * Math.cos(angle), // TOP=95% (highlights), BOTTOM=5% (shadows)
     });
   }
 
@@ -215,7 +215,7 @@ function generateNodes(cx: number, cy: number, circleR: number): CLMeshNode[] {
       offsetX: 0,
       offsetY: 0,
       chroma: rFrac * 100,
-      luminance: (angle / TWO_PI) * 100,
+      luminance: 50 + 45 * Math.cos(angle), // TOP=95% (highlights), BOTTOM=5% (shadows)
     });
   }
 
@@ -352,10 +352,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       chroma: n.chroma,
       luminance: n.luminance,
       // Pixel offset → colour-space offset (scale relative to circle radius)
-      // Chroma: full drag ≈ 25% chroma shift (clearly visible)
-      // Luminance: reduced to 6% max to minimize unwanted contrast changes
-      offsetX: Math.round((n.offsetX / circleR) * 250) / 10,
-      offsetY: Math.round(-(n.offsetY / circleR) * 60) / 10,
+      // Chroma: full drag ≈ 30% chroma shift (strong, clearly visible)
+      // Luminance: reduced to 8% max to minimize unwanted contrast changes
+      offsetX: Math.round((n.offsetX / circleR) * 300) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 80) / 10,
     }));
 
     useAppStore.getState().setCLNodes(storeNodes);
@@ -398,9 +398,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
             const dist = Math.sqrt(dist2);
             const chroma = (dist / circleR) * 100;
             // Angle from top, clockwise → atan2(dx, -dy)
+            // Luminance: TOP=highlights (95%), BOTTOM=shadows (5%)
             let angle = Math.atan2(dx, -dy);
             if (angle < 0) angle += TWO_PI;
-            const luminance = (angle / TWO_PI) * 100;
+            const luminance = 50 + 45 * Math.cos(angle);
             const [r, g, b] = hslToRgb(CL_BG_HUE, chroma, luminance);
             data[idx] = r;
             data[idx + 1] = g;
@@ -415,14 +416,6 @@ export default function CLGrid({ className = '' }: CLGridProps) {
         }
       }
       ctx.putImageData(imageData, 0, 0);
-
-      // Vignette
-      const vigGrad = ctx.createRadialGradient(cx, cy, circleR * 0.45, cx, cy, circleR * 1.05);
-      vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      vigGrad.addColorStop(0.65, 'rgba(0,0,0,0)');
-      vigGrad.addColorStop(1, 'rgba(0,0,0,0.5)');
-      ctx.fillStyle = vigGrad;
-      ctx.fillRect(0, 0, w, h);
 
       // Subtle grid lines — 8 radial at 45° intervals
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
@@ -441,6 +434,13 @@ export default function CLGrid({ className = '' }: CLGridProps) {
         ctx.arc(cx, cy, circleR * (r / 4), 0, TWO_PI);
         ctx.stroke();
       }
+
+      // Zone labels — Highlights (top) / Shadows (bottom)
+      ctx.font = '9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(255,255,255,0.2)';
+      ctx.fillText('HIGHLIGHTS', cx, cy - circleR - 5);
+      ctx.fillText('SHADOWS', cx, cy + circleR + 12);
     },
     [getCircleGeom],
   );
@@ -529,7 +529,7 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       if (angle < 0) angle += TWO_PI;
 
       const chromaSample = clamp((dist / circleR) * 100, 0, 100);
-      const lumSample = clamp((angle / TWO_PI) * 100, 0, 100);
+      const lumSample = clamp(50 + 45 * Math.cos(angle), 0, 100);
       const [fr, fg, fb] = hslToRgb(CL_BG_HUE, chromaSample, lumSample);
 
       ctx.beginPath();
