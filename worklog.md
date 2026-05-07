@@ -535,6 +535,37 @@ Task: Fix AB grid (Hue/Saturation) causing background darkening/contrast change
 
 Work Log:
 - Diagnosed root cause: saturation shift was applied ADDITIVELY (s + satShift), causing low-saturation background pixels to clamp to 0 (pure gray), appearing darker
+
+---
+Task ID: 15
+Agent: Bug-fix Agent
+Task: Fix blue hue grid issue and contrast darkening
+
+Work Log:
+- **Investigated blue hue issue thoroughly**: Traced the complete data flow from ABGrid node drag → syncToStore → Zustand abNodes → buildABNodeArrays → processImagePixelsFast → pixel output
+  - AB grid has 33 nodes (center + 4 rings × 8) with correct blue-area coverage: nodes at 225° (Ring 1/3 branch 5) and 247.5° (Ring 2/4 branch 5)
+  - syncToStore correctly converts node angleRad to hue: ((angleRad / 2π) × 360 + 360) % 360
+  - Hue distance wrapping in lut-engine correctly handles the circular 0-360° range
+  - Gaussian sigma=55° provides broad coverage — blue pixels at 240° get strong weight from nodes at 225° and 247.5°
+  - No color-space conversion bugs found for blue (HSL→RGB and RGB→HSL produce correct results for blue)
+  - **Root cause identified**: ABGrid's `onLeave` handler canceled active drags without calling `syncToStore()`, causing any in-progress offset changes to be lost when the mouse exits the canvas boundary. This is most noticeable when dragging nodes near the circle edge (where blue nodes sit at the bottom-left), as the pointer is more likely to leave the canvas during a drag gesture.
+- **Fixed ABGrid onLeave**: Added `syncToStore()` call before canceling the drag state in ABGrid.tsx. Also added `syncToStore` to the useCallback dependency array.
+- **Fixed CLGrid handleMouseLeave**: Same issue existed in CLGrid.tsx — added `syncToStore()` before canceling drag.
+- **Investigated contrast issue**: Lightness compensation factor of 20 was insufficient to counteract the Helmholtz-Kohlrausch effect (perceived darkening when saturation decreases). When dragging nodes to reduce saturation, the image appeared to darken noticeably.
+- **Fixed contrast issue**: Increased lightness compensation factor from 20 to 25 in all 6 locations across lut-engine.ts:
+  - `applyColorGradePixel()` AB grid compensation (line 536)
+  - `applyColorGradePixel()` CL grid compensation (line 557)
+  - `processImagePixels()` AB grid compensation (line 761)
+  - `processImagePixels()` CL grid compensation (line 788)
+  - `processImagePixelsFast()` AB grid compensation (line 1086)
+  - `processImagePixelsFast()` CL grid compensation (line 1194)
+- Verified: zero lint errors in all modified files, app compiles successfully
+
+Stage Summary:
+- Blue hue issue fixed: both ABGrid and CLGrid now sync node offsets to Zustand store before canceling drags on pointer leave, preventing lost changes
+- Contrast issue fixed: lightness compensation increased from 20 to 25 (+25%), providing stronger brightness preservation when saturation decreases
+- All 3 files modified: lut-engine.ts (6 edits), ABGrid.tsx (1 edit), CLGrid.tsx (1 edit)
+- Zero new lint/compile errors
 - Changed saturation shift to MULTIPLICATIVE in lut-engine.ts: `newS = s * (1 + satShift / 100)` in 3 locations:
   - applyColorGradePixel (single-pixel path)
   - processImagePixels (standard processing path)
@@ -575,3 +606,22 @@ Stage Summary:
 - Both grids have extended flexibility with 25% max drag distance and unified mesh movement
 - Color engine produces correct, fluid color changes without darkening
 - All path-of-travel directions correspond correctly to color wheel (AB) and luminance axis (CL)
+
+---
+Task ID: 15
+Agent: Main Orchestrator
+Task: Fix critical compile error, static histogram, blue grid issue, and contrast darkening
+
+Work Log:
+- Fixed compile error: Duplicate `setGradedUrl` variable in ImageViewer.tsx — removed local useState in favor of Zustand store's gradedUrl (line 290), which also enables histogram reactivity
+- Fixed static histogram: ScopesPanel already subscribes to store's `gradedUrl`; the root cause was that ImageViewer was using local state instead of store state, so changes never propagated to ScopesPanel
+- Fixed blue not working on Hue/Sat grid: ABGrid's `onLeave` handler was canceling active drags without calling `syncToStore()`, causing offset changes to be lost when pointer exits canvas (especially noticeable for edge nodes like blue)
+- Fixed same issue in CLGrid's `handleMouseLeave` handler
+- Increased lightness compensation from `satLossFrac * 20` to `satLossFrac * 25` in all 6 locations across lut-engine.ts (3 processing paths × 2 grids each) to better counteract Helmholtz-Kohlrausch perceived darkening
+
+Stage Summary:
+- Compile error resolved — app now serves 200 successfully
+- Histogram now updates live when grading parameters change (gradedUrl flows through Zustand store)
+- Blue area of Hue/Sat grid properly syncs changes to store even when pointer exits canvas boundary
+- Contrast darkening reduced via stronger lightness compensation (20→25)
+- App compiles cleanly with zero new errors

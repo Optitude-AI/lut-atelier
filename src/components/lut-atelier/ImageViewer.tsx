@@ -274,6 +274,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const channelData = useAppStore((s) => s.channelData);
   const abNodes = useAppStore((s) => s.abNodes);
   const clNodes = useAppStore((s) => s.clNodes);
+  const gradedUrl = useAppStore((s) => s.gradedUrl);
   const setGradedUrl = useAppStore((s) => s.setGradedUrl);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -286,8 +287,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const [containerSize, setContainerSize] = useState({ w: 0, h: 0 });
   const [isDragOver, setIsDragOver] = useState(false);
 
-  /* ----- Graded Image (canvas-based pixel processing) ----- */
-  const [gradedUrl, setGradedUrl] = useState<string | null>(null);
+  /* ----- Graded Image: sourced from Zustand store for scopes reactivity ----- */
 
   /* ----- Cached source data for fast re-processing ----- */
   const srcImageRef = useRef<HTMLImageElement | null>(null);

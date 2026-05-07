@@ -796,13 +796,16 @@ export default function ABGrid({ className = '' }: { className?: string }) {
     hoverIdxRef.current = -1;
     setTip(null);
     if (draggingRef.current) {
+      // Sync offsets to store BEFORE canceling drag — otherwise changes
+      // made during the drag are lost if the pointer exits the canvas.
+      syncToStore();
       draggingRef.current = false;
       dragIdxRef.current = -1;
       dragStartRef.current = null;
     }
     olRef.current?.style.setProperty('cursor', 'default');
     sched();
-  }, [sched]);
+  }, [sched, syncToStore]);
 
   const onDbl = useCallback(
     (e: React.MouseEvent) => {

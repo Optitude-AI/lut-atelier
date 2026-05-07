@@ -921,11 +921,14 @@ export default function CLGrid({ className = '' }: CLGridProps) {
     }
     setTooltip(null);
     if (isDraggingRef.current) {
+      // Sync offsets to store BEFORE canceling drag — otherwise changes
+      // made during the drag are lost if the pointer exits the canvas.
+      syncToStore();
       isDraggingRef.current = false;
       dragInfoRef.current = null;
     }
     overlayCanvasRef.current?.style.setProperty('cursor', 'default');
-  }, [scheduleDraw]);
+  }, [scheduleDraw, syncToStore]);
 
   // ─── Render ──────────────────────────────────────────────────────────────
   return (
