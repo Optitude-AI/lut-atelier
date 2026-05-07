@@ -266,10 +266,10 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       lightness: 50,
       // Pixel offset → colour-space offset  (scale relative to circle radius)
       // Hue: full drag ≈ 50° hue shift (strong, clearly visible)
-      // Saturation: multiplicative percentage, full drag ≈ 20% change
+      // Saturation: multiplicative percentage, full drag ≈ 15% change
       //   Applied as: newS = s * (1 + satShift / 100)
       offsetX: Math.round((n.offsetX / maxR) * 500) / 10,
-      offsetY: Math.round(-(n.offsetY / maxR) * 200) / 10,
+      offsetY: Math.round(-(n.offsetY / maxR) * 250) / 10,
     }));
 
     useAppStore.getState().setABNodes(storeNodes);

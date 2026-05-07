@@ -274,6 +274,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const channelData = useAppStore((s) => s.channelData);
   const abNodes = useAppStore((s) => s.abNodes);
   const clNodes = useAppStore((s) => s.clNodes);
+  const setGradedUrl = useAppStore((s) => s.setGradedUrl);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -365,9 +366,9 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     ctx.putImageData(imageData, 0, 0);
 
     // Use toDataURL instead of blob URLs (synchronous, avoids blob overhead)
-    const url = canvas.toDataURL('image/jpeg', 0.92);
+    const url = canvas.toDataURL('image/png');
     setGradedUrl(url);
-  }, [curveData, channelData, abNodes, clNodes, globalIntensity]);
+  }, [curveData, channelData, abNodes, clNodes, globalIntensity, setGradedUrl]);
 
   // Keep ref in sync so image-load effect can call latest version
   useEffect(() => {

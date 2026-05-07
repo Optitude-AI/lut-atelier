@@ -292,6 +292,10 @@ export interface AppStore {
   isExportOpen: boolean;
   setIsExportOpen: (open: boolean) => void;
 
+  // Graded image URL (for live scopes)
+  gradedUrl: string | null;
+  setGradedUrl: (url: string | null) => void;
+
   // Global LUT intensity
   globalIntensity: number;
   setGlobalIntensity: (intensity: number) => void;
@@ -601,6 +605,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setLeftPanel: (panel) => set({ leftPanel: panel }),
   isExportOpen: false,
   setIsExportOpen: (open) => set({ isExportOpen: open }),
+
+  // Graded image URL (for live scopes)
+  gradedUrl: null as string | null,
+  setGradedUrl: (url) => set({ gradedUrl: url }),
 
   // Global intensity
   globalIntensity: 100,

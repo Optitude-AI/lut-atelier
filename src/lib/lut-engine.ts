@@ -533,7 +533,7 @@ export function applyColorGradePixel(
     let compL = l;
     if (newS < s && s > 1 && l > 2 && l < 98) {
       const satLossFrac = (s - newS) / s; // 0..1
-      compL = Math.min(100, l + satLossFrac * 15);
+      compL = Math.min(100, l + satLossFrac * 20);
     }
 
     const [abR, abG, abB] = hslToRgb(newH, newS, compL);
@@ -554,7 +554,7 @@ export function applyColorGradePixel(
     // ── Lightness compensation when saturation decreases ──
     if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
       const satLossFrac = (s2 - newS2) / s2;
-      newL2 = Math.min(100, newL2 + satLossFrac * 15);
+      newL2 = Math.min(100, newL2 + satLossFrac * 20);
     }
 
     const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
@@ -758,7 +758,7 @@ export function processImagePixels(
         let abL = l;
         if (newS < s && s > 1 && l > 2 && l < 98) {
           const satLossFrac = (s - newS) / s;
-          abL = Math.min(100, l + satLossFrac * 15);
+          abL = Math.min(100, l + satLossFrac * 20);
         }
 
         const [abR, abG, abB] = hslToRgb(newH, newS, abL);
@@ -785,7 +785,7 @@ export function processImagePixels(
         // ── Lightness compensation when saturation decreases ──
         if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
           const satLossFrac = (s2 - newS2) / s2;
-          newL2 = Math.min(100, newL2 + satLossFrac * 15);
+          newL2 = Math.min(100, newL2 + satLossFrac * 20);
         }
 
         const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
@@ -1083,7 +1083,7 @@ export function processImagePixelsFast(
             let compL = lPct;
             if (newS < sPct && sPct > 1 && lPct > 2 && lPct < 98) {
               const satLossFrac = (sPct - newS) / sPct;
-              compL = Math.min(100, lPct + satLossFrac * 15);
+              compL = Math.min(100, lPct + satLossFrac * 20);
             }
 
             // Inline HSL to RGB
@@ -1191,7 +1191,7 @@ export function processImagePixelsFast(
             // ── Lightness compensation when saturation decreases ──
             if (newS2 < curSPct && curSPct > 1 && newL2 > 2 && newL2 < 98) {
               const satLossFrac = (curSPct - newS2) / curSPct;
-              newL2 = Math.min(100, newL2 + satLossFrac * 15);
+              newL2 = Math.min(100, newL2 + satLossFrac * 20);
             }
 
             // Inline HSL to RGB for CL result

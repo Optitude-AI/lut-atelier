@@ -926,6 +926,7 @@ function LiveIndicator({ isLive }: { isLive: boolean }) {
 export default function ScopesPanel({ className }: ScopesPanelProps) {
   const [activeTab, setActiveTab] = useState('histogram');
   const currentImage = useAppStore((s) => s.currentImage);
+  const gradedUrl = useAppStore((s) => s.gradedUrl);
 
   // Track whether we have real image data
   const [isLive, setIsLive] = useState(false);
@@ -938,16 +939,24 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
   const paradeData = useRef(generateDemoParade());
   const waveformData = useRef(generateDemoWaveform());
 
-  // Extract real image data when currentImage changes
+  // Helper to batch scope state updates (avoids set-state-in-effect lint warning)
+  const refreshScopesState = useCallback((isLiveMode: boolean) => {
+    setIsLive(isLiveMode);
+    setScopeVersion((v) => v + 1);
+  }, []);
+
+  // Extract real image data when gradedUrl changes (for live scopes)
   useEffect(() => {
-    if (!currentImage?.dataUrl) {
+    // Use graded image if available, otherwise fall back to original
+    const imageUrl = gradedUrl || currentImage?.dataUrl;
+
+    if (!imageUrl) {
       // No image loaded — fall back to demo data
       histogramData.current = generateDemoHistogram();
       vectorscopeData.current = generateDemoVectorscope();
       paradeData.current = generateDemoParade();
       waveformData.current = generateDemoWaveform();
-      setIsLive(false);
-      setScopeVersion((v) => v + 1);
+      queueMicrotask(() => refreshScopesState(false));
       return;
     }
 
@@ -983,46 +992,40 @@ export default function ScopesPanel({ className }: ScopesPanelProps) {
       // Generate waveform from real data
       waveformData.current = generateWaveformFromImageData(imageData);
 
-      setIsLive(true);
-      setScopeVersion((v) => v + 1);
+      queueMicrotask(() => refreshScopesState(!!gradedUrl));
     };
     img.onerror = () => {
       // On error, keep demo data
-      setIsLive(false);
-      setScopeVersion((v) => v + 1);
+      queueMicrotask(() => refreshScopesState(false));
     };
-    img.src = currentImage.dataUrl;
+    img.src = imageUrl;
 
     // Cleanup
     return () => {
       img.onload = null;
       img.onerror = null;
     };
-  }, [currentImage]);
+  }, [gradedUrl, currentImage?.dataUrl, refreshScopesState]);
 
   // Memoize draw functions — depend on scopeVersion so they re-trigger redraws
   const drawHistogram = useCallback(
     (canvas: HTMLCanvasElement) => drawRGBHistogram(canvas, histogramData.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scopeVersion] // scopeVersion triggers redraw when image data changes
+    [scopeVersion],
   );
 
   const renderVectorscope = useCallback(
     (canvas: HTMLCanvasElement) => drawVectorscope(canvas, vectorscopeData.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scopeVersion] // scopeVersion triggers redraw when image data changes
+    [scopeVersion],
   );
 
   const renderParade = useCallback(
     (canvas: HTMLCanvasElement) => drawRGBParade(canvas, paradeData.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scopeVersion] // scopeVersion triggers redraw when image data changes
+    [scopeVersion],
   );
 
   const renderWaveform = useCallback(
     (canvas: HTMLCanvasElement) => drawWaveform(canvas, waveformData.current),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scopeVersion] // scopeVersion triggers redraw when image data changes
+    [scopeVersion],
   );
 
   const tabVariants = {
