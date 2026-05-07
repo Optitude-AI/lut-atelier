@@ -625,3 +625,22 @@ Stage Summary:
 - Blue area of Hue/Sat grid properly syncs changes to store even when pointer exits canvas boundary
 - Contrast darkening reduced via stronger lightness compensation (20→25)
 - App compiles cleanly with zero new errors
+---
+Task ID: 15
+Agent: Main Orchestrator
+Task: Fix image going out of focus when grid nodes are moved
+
+Work Log:
+- Diagnosed root cause: source image downsampled to max 800px for processing, but graded output displayed at original image dimensions
+- When grading starts, display switches from full-resolution original to 800px graded version → visible blur/quality loss
+- Fix 1: Increased maxDim from 800 to 1600 (covers most displays including 2x Retina)
+- Fix 2: Replaced canvas.toDataURL('image/png') with canvas.toBlob('image/jpeg', 0.92) + URL.createObjectURL for faster encoding and smaller memory footprint
+- Fix 3: Added prevBlobUrlRef to track and revoke old blob URLs, preventing memory leaks
+- Fix 4: Added blob URL cleanup when image is removed from viewer
+- Verified ScopesPanel correctly watches gradedUrl and updates histogram/vectorscope data
+
+Stage Summary:
+- Image processing resolution doubled (800→1600), eliminating visible blur on most display sizes
+- JPEG blob URLs replace PNG data URLs for significantly faster encoding
+- Memory leak prevention via blob URL revocation
+- Scopes confirmed working correctly with graded image updates

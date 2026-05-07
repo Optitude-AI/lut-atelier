@@ -296,6 +296,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageLoadedRef = useRef(false);
   const processFnRef = useRef<() => void>(() => {});
+  const prevBlobUrlRef = useRef<string | null>(null);
 
   // Check if any manual adjustments have been made
   const hasAdjustments = useMemo(() => {
@@ -365,9 +366,18 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
     ctx.putImageData(imageData, 0, 0);
 
-    // Use toDataURL instead of blob URLs (synchronous, avoids blob overhead)
-    const url = canvas.toDataURL('image/png');
-    setGradedUrl(url);
+    // Use blob URLs + JPEG for fast encoding (much faster than PNG toDataURL)
+    canvas.toBlob((blob) => {
+      if (blob) {
+        // Revoke previous blob URL to prevent memory leaks
+        if (prevBlobUrlRef.current) {
+          URL.revokeObjectURL(prevBlobUrlRef.current);
+        }
+        const url = URL.createObjectURL(blob);
+        prevBlobUrlRef.current = url;
+        setGradedUrl(url);
+      }
+    }, 'image/jpeg', 0.92);
   }, [curveData, channelData, abNodes, clNodes, globalIntensity, setGradedUrl]);
 
   // Keep ref in sync so image-load effect can call latest version
@@ -383,6 +393,11 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       srcImageRef.current = null;
       srcPixelsRef.current = null;
       imageLoadedRef.current = false;
+      // Clean up blob URL when image is removed
+      if (prevBlobUrlRef.current) {
+        URL.revokeObjectURL(prevBlobUrlRef.current);
+        prevBlobUrlRef.current = null;
+      }
       queueMicrotask(() => setGradedUrl(null));
       return;
     }
@@ -394,8 +409,8 @@ export default function ImageViewer({ className }: ImageViewerProps) {
 
       srcImageRef.current = img;
 
-      // Downsample for processing (800px max dimension)
-      const maxDim = 800;
+      // Downsample for processing (1600px max dimension — sharp on most displays including Retina)
+      const maxDim = 1600;
       const scale = Math.min(maxDim / img.width, maxDim / img.height, 1);
       const w = Math.round(img.width * scale);
       const h = Math.round(img.height * scale);
