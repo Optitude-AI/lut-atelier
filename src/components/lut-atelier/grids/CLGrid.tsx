@@ -59,7 +59,7 @@ const NODE_HIT_RADIUS = 11;
 const CENTER_HIT_RADIUS = 14;
 const RING_RADIUS_FRACS = [0, 0.22, 0.44, 0.70, 1.0];
 const NUM_SPOKES = 8;
-const FALLOFF_SIGMA = 1.8;
+const FALLOFF_SIGMA = 3.0;
 const MAX_DRAG_FRACTION = 0.18;
 const CL_BG_HUE = 30;
 const DEG = Math.PI / 180;
@@ -352,10 +352,10 @@ export default function CLGrid({ className = '' }: CLGridProps) {
       chroma: n.chroma,
       luminance: n.luminance,
       // Pixel offset → colour-space offset (scale relative to circle radius)
-      // Chroma: full drag ≈ 20% chroma shift (responsive but subtle)
-      // Luminance: reduced to 4% max to minimize unwanted contrast/brightness changes
-      offsetX: Math.round((n.offsetX / circleR) * 200) / 10,
-      offsetY: Math.round(-(n.offsetY / circleR) * 40) / 10,
+      // Chroma: full drag ≈ 25% chroma shift (clearly visible)
+      // Luminance: reduced to 6% max to minimize unwanted contrast changes
+      offsetX: Math.round((n.offsetX / circleR) * 250) / 10,
+      offsetY: Math.round(-(n.offsetY / circleR) * 60) / 10,
     }));
 
     useAppStore.getState().setCLNodes(storeNodes);

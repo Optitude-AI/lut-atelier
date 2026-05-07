@@ -38,7 +38,7 @@ const NODE_RADIUS = 4.5;
 const CENTER_RADIUS = 7;
 const HIT_RADIUS = 13;
 const MAX_DRAG_FRAC = 0.18;
-const SIGMA = 1.8;
+const SIGMA = 3.0;
 const TWO_PI = Math.PI * 2;
 const INV_TWO_PI = 1 / TWO_PI;
 
@@ -265,11 +265,11 @@ export default function ABGrid({ className = '' }: { className?: string }) {
       saturation: Math.round(n.radiusFrac * 1000) / 10,
       lightness: 50,
       // Pixel offset → colour-space offset  (scale relative to circle radius)
-      // Hue: full drag ≈ 40° hue shift (responsive but not excessive)
-      // Saturation: multiplicative percentage, full drag ≈ 12% change (subtle to prevent darkening)
+      // Hue: full drag ≈ 50° hue shift (strong, clearly visible)
+      // Saturation: multiplicative percentage, full drag ≈ 20% change
       //   Applied as: newS = s * (1 + satShift / 100)
-      offsetX: Math.round((n.offsetX / maxR) * 400) / 10,
-      offsetY: Math.round(-(n.offsetY / maxR) * 120) / 10,
+      offsetX: Math.round((n.offsetX / maxR) * 500) / 10,
+      offsetY: Math.round(-(n.offsetY / maxR) * 200) / 10,
     }));
 
     useAppStore.getState().setABNodes(storeNodes);

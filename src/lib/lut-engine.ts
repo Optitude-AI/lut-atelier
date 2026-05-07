@@ -340,7 +340,7 @@ export function interpolateABGrid(
     const dist = Math.sqrt(hueDist * hueDist + satDist * satDist);
 
     // Inverse distance weight with minimum distance to avoid division by zero
-    const sigma = 35; // Tighter spread so effects stay localized to the targeted color region
+    const sigma = 55; // Wide spread — dragging one hue affects a broad, cohesive color family
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -386,7 +386,7 @@ export function interpolateCLGrid(
     const dist = Math.sqrt(chromaDist * chromaDist + lumDist * lumDist);
 
     // Inverse distance weight with Gaussian falloff
-    const sigma = 30; // Tighter spread so effects stay localized to the targeted chroma/lum region
+    const sigma = 40; // Moderate-wide spread — chroma/lum shifts affect nearby tonal ranges
     const weight = Math.exp(-(dist * dist) / (2 * sigma * sigma));
 
     totalWeight += weight;
@@ -533,7 +533,7 @@ export function applyColorGradePixel(
     let compL = l;
     if (newS < s && s > 1 && l > 2 && l < 98) {
       const satLossFrac = (s - newS) / s; // 0..1
-      compL = Math.min(100, l + satLossFrac * 10);
+      compL = Math.min(100, l + satLossFrac * 15);
     }
 
     const [abR, abG, abB] = hslToRgb(newH, newS, compL);
@@ -554,7 +554,7 @@ export function applyColorGradePixel(
     // ── Lightness compensation when saturation decreases ──
     if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
       const satLossFrac = (s2 - newS2) / s2;
-      newL2 = Math.min(100, newL2 + satLossFrac * 10);
+      newL2 = Math.min(100, newL2 + satLossFrac * 15);
     }
 
     const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
@@ -758,7 +758,7 @@ export function processImagePixels(
         let abL = l;
         if (newS < s && s > 1 && l > 2 && l < 98) {
           const satLossFrac = (s - newS) / s;
-          abL = Math.min(100, l + satLossFrac * 10);
+          abL = Math.min(100, l + satLossFrac * 15);
         }
 
         const [abR, abG, abB] = hslToRgb(newH, newS, abL);
@@ -785,7 +785,7 @@ export function processImagePixels(
         // ── Lightness compensation when saturation decreases ──
         if (newS2 < s2 && s2 > 1 && newL2 > 2 && newL2 < 98) {
           const satLossFrac = (s2 - newS2) / s2;
-          newL2 = Math.min(100, newL2 + satLossFrac * 10);
+          newL2 = Math.min(100, newL2 + satLossFrac * 15);
         }
 
         const [clR, clG, clB] = hslToRgb(h2, newS2, newL2);
@@ -890,9 +890,9 @@ export function processImagePixelsFast(
   const clOffY = clData.offsetYs;
   const clCount = clData.count;
 
-  // Pre-compute 1/(2*sigma^2) for AB and CL grids (tighter sigma = more localized effects)
-  const AB_INV_2SIGMA2 = 1 / (2 * 35 * 35); // sigma = 35
-  const CL_INV_2SIGMA2 = 1 / (2 * 30 * 30); // sigma = 30
+  // Pre-compute 1/(2*sigma^2) for AB and CL grids (wide sigma = cohesive, unified color shifts)
+  const AB_INV_2SIGMA2 = 1 / (2 * 55 * 55); // sigma = 55
+  const CL_INV_2SIGMA2 = 1 / (2 * 40 * 40); // sigma = 40
 
   // Check if LUTs are identity (avoid unnecessary work)
   const hasMasterCurve = masterLUT !== rLUT; // heuristic: if they differ, master was custom-built
@@ -1083,7 +1083,7 @@ export function processImagePixelsFast(
             let compL = lPct;
             if (newS < sPct && sPct > 1 && lPct > 2 && lPct < 98) {
               const satLossFrac = (sPct - newS) / sPct;
-              compL = Math.min(100, lPct + satLossFrac * 10);
+              compL = Math.min(100, lPct + satLossFrac * 15);
             }
 
             // Inline HSL to RGB
@@ -1191,7 +1191,7 @@ export function processImagePixelsFast(
             // ── Lightness compensation when saturation decreases ──
             if (newS2 < curSPct && curSPct > 1 && newL2 > 2 && newL2 < 98) {
               const satLossFrac = (curSPct - newS2) / curSPct;
-              newL2 = Math.min(100, newL2 + satLossFrac * 10);
+              newL2 = Math.min(100, newL2 + satLossFrac * 15);
             }
 
             // Inline HSL to RGB for CL result
