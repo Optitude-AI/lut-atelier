@@ -1,6 +1,7 @@
 #!/bin/bash
+cd /home/z/my-project/.next/standalone
 while true; do
-  bun run dev 2>&1
-  echo "[$(date)] Server died, restarting in 1s..." 
-  sleep 1
+    node server.js -p 3000 2>>/home/z/my-project/dev.log
+    echo "[$(date)] Standalone server exited, restarting..." >> /home/z/my-project/watchdog.log
+    sleep 0.5
 done
