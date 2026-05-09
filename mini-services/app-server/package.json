@@ -1,0 +1,6 @@
+{
+  "name": "app-server",
+  "scripts": {
+    "dev": "node /home/z/my-project/.next/standalone/server.js"
+  }
+}
