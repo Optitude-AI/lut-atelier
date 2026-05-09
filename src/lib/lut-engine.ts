@@ -4,6 +4,9 @@
  *
  * Color space: OKLAB (perceptually uniform, Björn Ottosson 2020)
  * Grid operations use OKLCh (polar form) for hue/chroma manipulation.
+ *
+ * Grid interpolation: Bilinear control mesh (replaces former Gaussian-weighted).
+ * Includes gamut mapping and ordered dithering for output quality.
  */
 
 // ─── Types (mirrored from useAppStore for server-side use) ───
@@ -67,6 +70,29 @@ export interface CLNodeArrays {
   count: number;
 }
 
+// ─── Bilinear mesh table types ───
+
+/** Pre-built 2D lookup table for AB bilinear control mesh (12 hue cols × 3 sat rows) */
+export interface ABMeshTable {
+  grid: Float64Array; // [(row * cols + col) * 2 + 0/1] = offsetX/offsetY
+  cols: number;       // 12
+  rows: number;       // 3
+  hueStep: number;    // 30
+  satMin: number;     // 25
+  satStep: number;    // 25
+}
+
+/** Pre-built 2D lookup table for CL bilinear control mesh (6 chroma cols × 6 lum rows) */
+export interface CLMeshTable {
+  grid: Float64Array;
+  cols: number;       // 6
+  rows: number;       // 6
+  chromaMin: number;  // 10
+  chromaStep: number; // 15
+  lumMin: number;     // 10
+  lumStep: number;    // 15
+}
+
 /** Parameters for the fast pixel processing path using pre-built LUTs and typed arrays */
 export interface FastGradeParams {
   masterLUT: Uint8Array;
@@ -80,6 +106,8 @@ export interface FastGradeParams {
   globalIntensity: number;
   neutralProtection: boolean;
   clAxis: string;
+  abMesh: ABMeshTable | null;
+  clMesh: CLMeshTable | null;
 }
 
 // ─── OKLAB Color Space Conversions ───
@@ -397,6 +425,46 @@ export function buildCLNodeArrays(nodes: CLGridNode[]): CLNodeArrays {
   return { chromas, lums, offsetXs, offsetYs, count: activeCount };
 }
 
+// ─── AB/CL Mesh Table Builders ───
+
+/**
+ * Build a 2D bilinear lookup table from AB grid nodes.
+ * Grid: 12 hue columns (0°–330°, step 30) × 3 saturation rows (25%, 50%, 75%).
+ * Each cell stores [offsetX, offsetY] = [hue shift degrees, sat shift %].
+ */
+export function buildABMeshTable(nodes: GridNode[]): ABMeshTable {
+  const COLS = 12, ROWS = 3, HUE_STEP = 30, SAT_MIN = 25, SAT_STEP = 25;
+  const grid = new Float64Array(COLS * ROWS * 2);
+  for (const node of nodes) {
+    const col = Math.round(node.hue / HUE_STEP) % COLS;
+    const row = Math.round((node.saturation - SAT_MIN) / SAT_STEP);
+    if (col >= 0 && col < COLS && row >= 0 && row < ROWS) {
+      grid[(row * COLS + col) * 2] = node.offsetX;
+      grid[(row * COLS + col) * 2 + 1] = node.offsetY;
+    }
+  }
+  return { grid, cols: COLS, rows: ROWS, hueStep: HUE_STEP, satMin: SAT_MIN, satStep: SAT_STEP };
+}
+
+/**
+ * Build a 2D bilinear lookup table from CL grid nodes.
+ * Grid: 6 chroma columns (10%–85%, step 15) × 6 luminance rows (10%–85%, step 15).
+ * Each cell stores [offsetX, offsetY] = [chroma shift %, luminance shift %].
+ */
+export function buildCLMeshTable(nodes: CLGridNode[]): CLMeshTable {
+  const COLS = 6, ROWS = 6, C_MIN = 10, C_STEP = 15, L_MIN = 10, L_STEP = 15;
+  const grid = new Float64Array(COLS * ROWS * 2);
+  for (const node of nodes) {
+    const col = Math.round((node.chroma - C_MIN) / C_STEP);
+    const row = Math.round((node.luminance - L_MIN) / L_STEP);
+    if (col >= 0 && col < COLS && row >= 0 && row < ROWS) {
+      grid[(row * COLS + col) * 2] = node.offsetX;
+      grid[(row * COLS + col) * 2 + 1] = node.offsetY;
+    }
+  }
+  return { grid, cols: COLS, rows: ROWS, chromaMin: C_MIN, chromaStep: C_STEP, lumMin: L_MIN, lumStep: L_STEP };
+}
+
 // ─── Cubic Spline Interpolation ───
 
 /**
@@ -454,79 +522,138 @@ export function cubicInterpolate(points: CurvePoint[], x: number): number {
   return a * p1.y + b * m0y + c * p2.y + d * m1y;
 }
 
-// ─── A/B Grid Interpolation (OKLCh) ───
+// ─── Gamut Mapping ───
 
 /**
- * Interpolate hue/chroma shift from A/B grid nodes using OKLCh color space.
- * Returns [hueShift, chromaShift, lightnessShift] based on Gaussian-weighted distance.
- *
- * A/B grid offsets: X = hue shift (degrees), Y = chroma shift.
- * Distance metric uses OKLCh hue distance (circular) + chroma distance.
- * OKLCh chroma range is ~0-0.37 for sRGB gamut; UI saturation 0-100% maps to 0-0.37.
+ * Gamut mapping: reduce chroma iteratively until RGB is within [0,1].
+ * Preserves hue and lightness; only reduces chroma.
+ * Uses binary search for efficiency (max 12 iterations).
+ */
+function gamutMapOkLCh(L: number, C: number, h: number): [number, number, number] {
+  // Try original chroma first
+  const [a, b] = oklchToOklab(L, C, h).slice(1) as [number, number];
+  const [r, g, bv] = oklabToLinearRgb(L, a, b);
+  if (r >= -0.001 && r <= 1.001 && g >= -0.001 && g <= 1.001 && bv >= -0.001 && bv <= 1.001) {
+    return [L, C, h]; // Already in gamut
+  }
+  // Binary search for max chroma within gamut
+  let lo = 0, hi = C;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    const [ma, mb] = oklchToOklab(L, mid, h).slice(1) as [number, number];
+    const [mr, mg, mbv] = oklabToLinearRgb(L, ma, mb);
+    if (mr >= -0.001 && mr <= 1.001 && mg >= -0.001 && mg <= 1.001 && mbv >= -0.001 && mbv <= 1.001) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return [L, lo, h];
+}
+
+// ─── Ordered Dithering ───
+
+// 4×4 Bayer matrix for ordered dithering
+const BAYER_4X4 = new Float64Array([
+  0,  8,  2, 10,
+  12, 4, 14,  6,
+  3, 11,  1,  9,
+  15, 7, 13,  5,
+]);
+
+/**
+ * Apply ordered dithering to final 8-bit output.
+ * Prevents color banding in smooth gradients.
+ */
+function dither(r: number, g: number, b: number, x: number, y: number): [number, number, number] {
+  const bx = x & 3; // % 4
+  const by = y & 3; // % 4
+  const threshold = (BAYER_4X4[by * 4 + bx] / 16 - 0.5) / 255;
+  return [
+    Math.max(0, Math.min(255, (r + 0.5) | 0 + (threshold > 0 ? 1 : 0))),
+    Math.max(0, Math.min(255, (g + 0.5) | 0 + (threshold > 0 ? 1 : 0))),
+    Math.max(0, Math.min(255, (b + 0.5) | 0 + (threshold > 0 ? 1 : 0))),
+  ];
+}
+
+// ─── A/B Grid Interpolation — Bilinear Control Mesh ───
+
+/**
+ * Interpolate hue/saturation shift from A/B grid using bilinear control mesh.
+ * Grid: 12 hues (0–330, step 30) × 3 saturations (25%, 50%, 75%).
+ * Hue wraps circularly; saturation clamps to [25, 75].
+ * Returns [hueShift (degrees), satShift (%), 0].
  */
 export function interpolateABGrid(
   nodes: GridNode[],
   pixelR: number, pixelG: number, pixelB: number,
   neutralProtection: boolean = false,
 ): [number, number, number] {
-  // Convert pixel to OKLCh (via sRGB 0-1)
+  // Convert pixel to OKLCh
   const [L, C, h] = srgb01ToOklch(pixelR, pixelG, pixelB);
 
-  // Skip near-neutral pixels if protection is on
+  // Skip near-neutral pixels
   if (neutralProtection && C < 0.005) return [0, 0, 0];
-
-  // Skip for very low chroma or lightness extremes
   if (C < 0.005 || L < 0.02 || L > 0.98) return [0, 0, 0];
 
-  let totalWeight = 0;
-  let hueShift = 0;
-  let chromaShift = 0;
+  // Convert OKLCh chroma to UI saturation %
+  const satPercent = (C / 0.37) * 100;
+  const satC = satPercent < 25 ? 25 : satPercent > 75 ? 75 : satPercent;
 
-  // Pre-compute 1/(2*sigma^2) for OKLCh distance
-  // Sigma 0.12 is appropriate for OKLCh chroma range ~0-0.37
-  const INV_2SIGMA2 = 1 / (2 * 0.12 * 0.12);
+  // Find cell — hue is circular (wraps at 360)
+  const colF = h / 30;
+  const colIdx = Math.floor(colF) % 12;
+  const u = colF - Math.floor(colF);
+  const nextColIdx = (colIdx + 1) % 12;
 
-  for (const node of nodes) {
-    if (node.offsetX === 0 && node.offsetY === 0) continue;
+  // Row — saturation (non-wrapping)
+  const rowF = (satC - 25) / 25;
+  const rowIdx = rowF < 0 ? 0 : rowF > 1 ? 1 : Math.floor(rowF);
+  const v = rowF - rowIdx;
+  const vC = v < 0 ? 0 : v > 1 ? 1 : v;
 
-    // Hue distance (circular, 0-180)
-    let hueDist = Math.abs(h - node.hue);
-    if (hueDist > 180) hueDist = 360 - hueDist;
+  // Lookup helper: find node by hue/saturation with tolerance
+  const findNode = (targetHue: number, targetSat: number): GridNode | null => {
+    for (const node of nodes) {
+      if (Math.abs(node.hue - targetHue) < 0.1 && Math.abs(node.saturation - targetSat) < 0.1) {
+        return node;
+      }
+    }
+    return null;
+  };
 
-    // Chroma distance (in OKLCh units)
-    // Map UI saturation 0-100% to OKLCh chroma 0-0.37
-    const nodeChroma = node.saturation / 100 * 0.37;
-    const chromaDist = Math.abs(C - nodeChroma);
+  // Get 4 corner nodes
+  const h0 = colIdx * 30;
+  const h1 = nextColIdx * 30;
+  const s0 = 25 + rowIdx * 25;
+  const s1 = 25 + (rowIdx + 1) * 25;
 
-    // Combined distance: scale hue to similar magnitude as chroma
-    // Hue in degrees (0-180 range for distance), chroma in 0-0.37
-    const distSq = hueDist * hueDist * 0.001 + chromaDist * chromaDist;
+  const n00 = findNode(h0, s0);
+  const n10 = findNode(h1, s0);
+  const n01 = findNode(h0, s1);
+  const n11 = findNode(h1, s1);
 
-    const weight = Math.exp(-distSq * INV_2SIGMA2);
+  // Fallback: if any corner is missing, return zero
+  if (!n00 || !n10 || !n01 || !n11) return [0, 0, 0];
 
-    totalWeight += weight;
-    hueShift += node.offsetX * weight;       // degrees
-    chromaShift += node.offsetY * weight;     // will be mapped to chroma
-  }
+  // Bilinear interpolation of offsets
+  const w00 = (1 - u) * (1 - vC);
+  const w10 = u * (1 - vC);
+  const w01 = (1 - u) * vC;
+  const w11 = u * vC;
 
-  if (totalWeight === 0) return [0, 0, 0];
+  const dx = w00 * n00.offsetX + w10 * n10.offsetX + w01 * n01.offsetX + w11 * n11.offsetX;
+  const dy = w00 * n00.offsetY + w10 * n10.offsetY + w01 * n01.offsetY + w11 * n11.offsetY;
 
-  return [
-    hueShift / totalWeight,
-    chromaShift / totalWeight,
-    0, // no lightness change from A/B grid
-  ];
+  return [dx, dy, 0]; // hue shift degrees, sat shift %
 }
 
-// ─── C/L Grid Interpolation (OKLCh with axis rotation) ───
+// ─── C/L Grid Interpolation — Bilinear Control Mesh ───
 
 /**
- * Interpolate chroma/luminance shift from C/L grid nodes using OKLCh.
- * The CL grid operates on:
- * - Vertical axis = OKLAB Lightness (L)
- * - Horizontal axis = OKLCh Chroma (C) rotated by the axis angle
- *
- * Returns [chromaShift, luminanceShift] based on Gaussian-weighted distance.
+ * Interpolate chroma/luminance shift from C/L grid using bilinear control mesh.
+ * Grid: 6 chroma (10%–85%, step 15) × 6 luminance (10%–85%, step 15).
+ * Returns [chromaShift (%), luminanceShift (%)].
  */
 export function interpolateCLGrid(
   nodes: CLGridNode[],
@@ -537,61 +664,70 @@ export function interpolateCLGrid(
   // Convert pixel to OKLCh
   const [L, C, h] = srgb01ToOklch(pixelR, pixelG, pixelB);
 
-  // Skip near-neutral pixels if protection is on
-  if (neutralProtection && C < 0.003) return [0, 0];
+  // Skip near-neutral pixels
+  if (neutralProtection && C < 0.005) return [0, 0];
+  if (C < 0.005) return [0, 0];
 
-  // Skip for very low chroma
-  if (C < 0.003) return [0, 0];
+  // Convert OKLCh chroma to %, lightness to %
+  const chromaPercent = (C / 0.37) * 100;
+  const lumPercent = L * 100;
 
-  const axisInfo = CL_AXIS_DIRECTIONS[axis];
+  // Clamp to grid bounds
+  const chromaC = chromaPercent < 10 ? 10 : chromaPercent > 85 ? 85 : chromaPercent;
+  const lumC = lumPercent < 10 ? 10 : lumPercent > 85 ? 85 : lumPercent;
 
-  let totalWeight = 0;
-  let chromaShift = 0;
-  let lumShift = 0;
+  // Find cell
+  const colF = (chromaC - 10) / 15;
+  const colIdx = colF < 0 ? 0 : colF > 4 ? 4 : Math.floor(colF);
+  const u = colF - colIdx;
 
-  // Pre-compute 1/(2*sigma^2)
-  const INV_2SIGMA2 = 1 / (2 * 0.12 * 0.12);
+  const rowF = (lumC - 10) / 15;
+  const rowIdx = rowF < 0 ? 0 : rowF > 4 ? 4 : Math.floor(rowF);
+  const v = rowF - rowIdx;
 
-  for (const node of nodes) {
-    if (node.offsetX === 0 && node.offsetY === 0) continue;
-
-    // For 'all' axis: use chroma + luminance directly
-    // For specific axes: project the pixel's chroma onto the axis direction
-    let effectiveChroma = C;
-
-    if (axis !== 'all') {
-      // Project chroma onto axis direction using hue alignment
-      const hRad = h * Math.PI / 180;
-      const axRad = axisInfo.hue * Math.PI / 180;
-      // Cosine similarity of hue angle with axis angle
-      const hueAlignment = Math.cos(hRad - axRad);
-      effectiveChroma = C * Math.max(0, hueAlignment); // Only affect aligned hues
+  // Lookup helper: find CL node by chroma/luminance with tolerance
+  const findNode = (targetChroma: number, targetLum: number): CLGridNode | null => {
+    for (const node of nodes) {
+      if (Math.abs(node.chroma - targetChroma) < 0.1 && Math.abs(node.luminance - targetLum) < 0.1) {
+        return node;
+      }
     }
+    return null;
+  };
 
-    // Map node UI values to OKLCh ranges
-    // Node chroma: 0-100 maps to 0-0.37 OKLCh chroma
-    const nodeChroma = node.chroma / 100 * 0.37;
-    // Node luminance: 0-100 maps to 0-1 OKLAB L
-    const nodeLuminance = node.luminance / 100;
+  // Get 4 corner nodes
+  const c0 = 10 + colIdx * 15;
+  const c1 = 10 + (colIdx + 1) * 15;
+  const l0 = 10 + rowIdx * 15;
+  const l1 = 10 + (rowIdx + 1) * 15;
 
-    const chromaDist = Math.abs(effectiveChroma - nodeChroma);
-    const lumDist = Math.abs(L - nodeLuminance);
+  const n00 = findNode(c0, l0);
+  const n10 = findNode(c1, l0);
+  const n01 = findNode(c0, l1);
+  const n11 = findNode(c1, l1);
 
-    // Combined distance
-    const distSq = chromaDist * chromaDist + lumDist * lumDist;
-    const weight = Math.exp(-distSq * INV_2SIGMA2);
+  // Fallback: if any corner is missing, return zero
+  if (!n00 || !n10 || !n01 || !n11) return [0, 0];
 
-    totalWeight += weight;
-    chromaShift += node.offsetX * weight;
-    lumShift += node.offsetY * weight;
+  // Bilinear interpolation of offsets
+  const w00 = (1 - u) * (1 - v);
+  const w10 = u * (1 - v);
+  const w01 = (1 - u) * v;
+  const w11 = u * v;
+
+  let chromaShift = w00 * n00.offsetX + w10 * n10.offsetX + w01 * n01.offsetX + w11 * n11.offsetX;
+  const lumShift = w00 * n00.offsetY + w10 * n10.offsetY + w01 * n01.offsetY + w11 * n11.offsetY;
+
+  // If clAxis !== 'all': multiply chroma shift by cos(pixelHue - axisHue) for hue alignment
+  if (axis !== 'all') {
+    const axisInfo = CL_AXIS_DIRECTIONS[axis];
+    const hRad = h * Math.PI / 180;
+    const axRad = axisInfo.hue * Math.PI / 180;
+    const hueAlignment = Math.cos(hRad - axRad);
+    chromaShift *= Math.max(0, hueAlignment);
   }
 
-  if (totalWeight === 0) return [0, 0];
-
-  return [
-    chromaShift / totalWeight,
-    lumShift / totalWeight,
-  ];
+  return [chromaShift, lumShift]; // chroma shift %, luminance shift %
 }
 
 // ─── Channel Adjustments ───
@@ -640,6 +776,7 @@ export interface ColorGradeParams {
  * Apply the full color grading pipeline to a single RGB pixel (0-1 each).
  * Returns the graded [R, G, B] clamped to [0, 1].
  * Uses OKLAB/OKLCh for grid operations, RGB for channel adjustments.
+ * Includes gamut mapping after grid shifts. No dithering (needs spatial position).
  */
 export function applyColorGradePixel(
   r: number,
@@ -719,36 +856,40 @@ export function applyColorGradePixel(
   if (gChannel && gChannel.enabled) gOut = applyChannelAdjustment(gOut, gChannel);
   if (bChannel && bChannel.enabled) bOut = applyChannelAdjustment(bOut, bChannel);
 
-  // ── Step 3: A/B grid hue/chroma shifts in OKLCh space ──
+  // ── Step 3: A/B grid hue/saturation shifts in OKLCh space (bilinear mesh) ──
 
   if (abNodes && abNodes.length > 0) {
-    const [hueShift, chromaShift] = interpolateABGrid(
+    const [hueShift, satShift] = interpolateABGrid(
       abNodes, rOut, gOut, bOut, neutralProtection
     );
 
     // Convert pixel to OKLCh
     let [pxL, pxC, pxH] = srgb01ToOklch(rOut, gOut, bOut);
 
-    if (hueShift !== 0 || chromaShift !== 0) {
+    if (hueShift !== 0 || satShift !== 0) {
       // Apply hue shift (degrees)
       let newH = pxH + hueShift;
       newH = ((newH % 360) + 360) % 360;
 
-      // Apply chroma shift: map from UI scale to OKLCh chroma
-      // chromaShift is in the same units as offsetY (node offsets)
-      // Map proportionally: chromaShift / 100 gives fractional change
-      let newC = pxC * (1 + chromaShift / 100);
-      newC = Math.max(0, Math.min(0.37, newC));
+      // Apply saturation shift: satShift is in % units of UI saturation
+      // Convert current chroma to %, apply shift, convert back
+      let satP = (pxC / 0.37) * 100;
+      satP = satP + satShift;
+      let newC = (satP / 100) * 0.37;
+      newC = Math.max(0, newC);
+
+      // Gamut map to ensure RGB stays in [0,1]
+      const [gmL, gmC, gmH] = gamutMapOkLCh(pxL, newC, newH);
 
       // Convert back to sRGB 0-1
-      const [abR, abG, abB] = oklchToSrgb01(pxL, newC, newH);
+      const [abR, abG, abB] = oklchToSrgb01(gmL, gmC, gmH);
       rOut = abR;
       gOut = abG;
       bOut = abB;
     }
   }
 
-  // ── Step 4: C/L grid chroma/luminance shifts in OKLCh space ──
+  // ── Step 4: C/L grid chroma/luminance shifts in OKLCh space (bilinear mesh) ──
 
   if (clNodes && clNodes.length > 0) {
     const [chromaShift, lumShift] = interpolateCLGrid(
@@ -759,18 +900,19 @@ export function applyColorGradePixel(
       // Convert current pixel to OKLCh
       let [pxL, pxC, pxH] = srgb01ToOklch(rOut, gOut, bOut);
 
-      // Apply chroma shift (proportional)
+      // Apply chroma shift (proportional %)
       let newC = pxC * (1 + chromaShift / 100);
-      newC = Math.max(0, Math.min(0.37, newC));
+      newC = Math.max(0, newC);
 
-      // Apply luminance shift
-      // lumShift is in the same units as node offsetY
-      // Map to OKLAB L: lumShift / 100 gives fractional change
+      // Apply luminance shift (proportional %)
       let newL = pxL * (1 + lumShift / 100);
-      newL = Math.max(0, Math.min(1, newL));
+      newL = Math.max(0, newL);
+
+      // Gamut map
+      const [gmL, gmC, gmH] = gamutMapOkLCh(newL, newC, pxH);
 
       // Convert back to sRGB 0-1
-      const [clR, clG, clB] = oklchToSrgb01(newL, newC, pxH);
+      const [clR, clG, clB] = oklchToSrgb01(gmL, gmC, gmH);
       rOut = clR;
       gOut = clG;
       bOut = clB;
@@ -841,7 +983,7 @@ export function generateCubeLUT(
 /**
  * Process raw pixel data (RGBA Uint8ClampedArray) through the color grading pipeline.
  * Modifies the pixel data in-place.
- * Optimized internally to use curve LUTs for O(1) lookups instead of per-pixel cubic interpolation.
+ * Uses bilinear control mesh interpolation, gamut mapping, and ordered dithering.
  */
 export function processImagePixels(
   pixels: Uint8ClampedArray,
@@ -888,6 +1030,10 @@ export function processImagePixels(
   // Check if any grids have active nodes
   const hasActiveABNodes = abNodes && abNodes.length > 0 && abNodes.some(n => n.offsetX !== 0 || n.offsetY !== 0);
   const hasActiveCLNodes = clNodes && clNodes.length > 0 && clNodes.some(n => n.offsetX !== 0 || n.offsetY !== 0);
+
+  // Pre-build bilinear mesh tables for faster lookup
+  const abMesh = hasActiveABNodes ? buildABMeshTable(abNodes!) : null;
+  const clMesh = hasActiveCLNodes ? buildCLMeshTable(clNodes!) : null;
 
   // Global intensity
   const intensity = Math.max(0, Math.min(1, globalIntensity / 100));
@@ -957,30 +1103,35 @@ export function processImagePixels(
     if (gChannel && gChannel.enabled) gOut = applyChannelAdjustment(gOut, gChannel);
     if (bChannel && bChannel.enabled) bOut = applyChannelAdjustment(bOut, bChannel);
 
-    // ── Step 3: A/B grid hue/chroma shifts in OKLCh ──
-    if (hasActiveABNodes) {
-      const [hueShift, chromaShift] = interpolateABGrid(
+    // ── Step 3: A/B grid hue/saturation shifts via bilinear mesh ──
+    if (hasActiveABNodes && abMesh) {
+      const [hueShift, satShift] = interpolateABGrid(
         abNodes!, rOut, gOut, bOut, neutralProtection
       );
 
-      if (hueShift !== 0 || chromaShift !== 0) {
+      if (hueShift !== 0 || satShift !== 0) {
         let [pxL, pxC, pxH] = srgb01ToOklch(rOut, gOut, bOut);
 
         let newH = pxH + hueShift;
         newH = ((newH % 360) + 360) % 360;
 
-        let newC = pxC * (1 + chromaShift / 100);
-        newC = Math.max(0, Math.min(0.37, newC));
+        let satP = (pxC / 0.37) * 100;
+        satP = satP + satShift;
+        let newC = (satP / 100) * 0.37;
+        newC = Math.max(0, newC);
 
-        const [abR, abG, abB] = oklchToSrgb01(pxL, newC, newH);
+        // Gamut map
+        const [gmL, gmC, gmH] = gamutMapOkLCh(pxL, newC, newH);
+
+        const [abR, abG, abB] = oklchToSrgb01(gmL, gmC, gmH);
         rOut = abR;
         gOut = abG;
         bOut = abB;
       }
     }
 
-    // ── Step 4: C/L grid chroma/luminance shifts in OKLCh ──
-    if (hasActiveCLNodes) {
+    // ── Step 4: C/L grid chroma/luminance shifts via bilinear mesh ──
+    if (hasActiveCLNodes && clMesh) {
       const [chromaShift, lumShift] = interpolateCLGrid(
         clNodes!, rOut, gOut, bOut, clAxis, neutralProtection
       );
@@ -989,12 +1140,15 @@ export function processImagePixels(
         let [pxL, pxC, pxH] = srgb01ToOklch(rOut, gOut, bOut);
 
         let newC = pxC * (1 + chromaShift / 100);
-        newC = Math.max(0, Math.min(0.37, newC));
+        newC = Math.max(0, newC);
 
         let newL = pxL * (1 + lumShift / 100);
-        newL = Math.max(0, Math.min(1, newL));
+        newL = Math.max(0, newL);
 
-        const [clR, clG, clB] = oklchToSrgb01(newL, newC, pxH);
+        // Gamut map
+        const [gmL, gmC, gmH] = gamutMapOkLCh(newL, newC, pxH);
+
+        const [clR, clG, clB] = oklchToSrgb01(gmL, gmC, gmH);
         rOut = clR;
         gOut = clG;
         bOut = clB;
@@ -1006,10 +1160,13 @@ export function processImagePixels(
     gOut = (origG / 255) * invIntensity + gOut * intensity;
     bOut = (origB / 255) * invIntensity + bOut * intensity;
 
-    // ── Step 6: Clamp and write back ──
-    pixels[i] = (rOut * 255 + 0.5) | 0;
-    pixels[i + 1] = (gOut * 255 + 0.5) | 0;
-    pixels[i + 2] = (bOut * 255 + 0.5) | 0;
+    // ── Step 6: Dither and write back ──
+    const px = (i / 4) % width;
+    const py = (i / 4) / width | 0;
+    const [dr, dg, db] = dither(rOut * 255, gOut * 255, bOut * 255, px, py);
+    pixels[i] = dr;
+    pixels[i + 1] = dg;
+    pixels[i + 2] = db;
   }
 }
 
@@ -1018,16 +1175,16 @@ export function processImagePixels(
 /**
  * Optimized pixel processing using pre-built curve LUTs and typed array node data.
  * This is the high-performance path for real-time previews and batch processing.
- * Uses OKLAB/OKLCh for grid operations instead of HSL.
  *
  * Key optimizations:
  * - O(1) curve lookups via pre-built Uint8Array LUTs
- * - Flat typed arrays for grid node data (cache-friendly)
+ * - Bilinear control mesh interpolation (replaces former Gaussian loops)
+ * - Gamut mapping after grid shifts
+ * - Ordered dithering on final output
  * - Skips AB grid entirely when no active nodes
  * - Skips CL grid when no active CL nodes
  * - Local variable extraction to avoid repeated object property access
  * - Bitwise rounding instead of Math.round
- * - OKLCh for perceptually uniform color operations
  */
 export function processImagePixelsFast(
   pixels: Uint8ClampedArray,
@@ -1042,8 +1199,6 @@ export function processImagePixelsFast(
   const bLUT = params.bLUT;
   const lumLUT = params.lumLUT;
   const channelData = params.channelData;
-  const abData = params.abNodes;
-  const clData = params.clNodes;
   const neutralProtection = params.neutralProtection;
   const clAxis = params.clAxis as CLAxisType;
 
@@ -1083,26 +1238,28 @@ export function processImagePixelsFast(
   const bLift = hasB ? bChannel.lift / 100 : 0;
   const bOffset = hasB ? bChannel.offset / 100 : 0;
 
-  // AB node typed arrays
-  const hasAB = abData.count > 0;
-  const abHues = abData.hues;
-  const abSats = abData.sats;
-  const abLums = abData.lums;
-  const abOffX = abData.offsetXs;
-  const abOffY = abData.offsetYs;
-  const abCount = abData.count;
+  // AB/CL mesh tables (bilinear control mesh)
+  const abMesh = params.abMesh;
+  const clMesh = params.clMesh;
+  const hasAB = abMesh !== null;
+  const hasCL = clMesh !== null;
 
-  // CL node typed arrays
-  const hasCL = clData.count > 0;
-  const clChromas = clData.chromas;
-  const clLums = clData.lums;
-  const clOffX = clData.offsetXs;
-  const clOffY = clData.offsetYs;
-  const clCount = clData.count;
+  // Pre-extract AB mesh data
+  const abGrid = hasAB ? abMesh!.grid : null;
+  const abCols = hasAB ? abMesh!.cols : 0;
+  const abRows = hasAB ? abMesh!.rows : 0;
+  const abHueStep = hasAB ? abMesh!.hueStep : 30;
+  const abSatMin = hasAB ? abMesh!.satMin : 25;
+  const abSatStep = hasAB ? abMesh!.satStep : 25;
 
-  // Pre-compute 1/(2*sigma^2) for OKLCh distance grids
-  const AB_INV_2SIGMA2 = 1 / (2 * 0.12 * 0.12); // sigma = 0.12 (OKLCh units)
-  const CL_INV_2SIGMA2 = 1 / (2 * 0.12 * 0.12); // sigma = 0.12 (OKLCh units)
+  // Pre-extract CL mesh data
+  const clGrid = hasCL ? clMesh!.grid : null;
+  const clCols = hasCL ? clMesh!.cols : 0;
+  const clRows = hasCL ? clMesh!.rows : 0;
+  const clCMin = hasCL ? clMesh!.chromaMin : 10;
+  const clCStep = hasCL ? clMesh!.chromaStep : 15;
+  const clLMin = hasCL ? clMesh!.lumMin : 10;
+  const clLStep = hasCL ? clMesh!.lumStep : 15;
 
   // Pre-compute CL axis hue for axis rotation
   const clAxisHue = CL_AXIS_DIRECTIONS[clAxis]?.hue ?? 0;
@@ -1227,10 +1384,9 @@ export function processImagePixelsFast(
       if (bOffset !== 0) bOut += bOffset;
     }
 
-    // ── Step 3 & 4: Grid shifts in OKLCh space ──
+    // ── Step 3 & 4: Grid shifts via bilinear control mesh ──
     if (needsOKLCh) {
       // Convert sRGB 0-1 to OKLCh
-      // Inline gamma decode + OKLAB conversion for performance
       const lr = srgbGammaToLinear(rOut);
       const lg = srgbGammaToLinear(gOut);
       const lb = srgbGammaToLinear(bOut);
@@ -1253,49 +1409,56 @@ export function processImagePixelsFast(
       let pxH = Math.atan2(oB, oA) * (180 / Math.PI);
       if (pxH < 0) pxH += 360;
 
-      // AB grid (hue/chroma shifts) in OKLCh
+      // ── AB grid: bilinear mesh lookup ──
       if (hasAB && pxC >= 0.005 && oL >= 0.02 && oL <= 0.98) {
-        let totalWeight = 0;
-        let hueShift = 0;
-        let chromaShift = 0;
+        // Convert OKLCh chroma to UI saturation % and clamp
+        const satP = (pxC / 0.37) * 100;
+        const satC = satP < abSatMin ? abSatMin : satP > 75 ? 75 : satP;
 
-        for (let n = 0; n < abCount; n++) {
-          let hueDist = pxH - abHues[n];
-          if (hueDist < 0) hueDist = -hueDist;
-          if (hueDist > 180) hueDist = 360 - hueDist;
+        // Find cell — hue wraps circularly
+        const aColF = pxH / abHueStep;
+        const aColI = Math.floor(aColF) % abCols;
+        const aU = aColF - Math.floor(aColF);
+        const aColNext = (aColI + 1) % abCols;
 
-          // Map node saturation 0-100% to OKLCh chroma 0-0.37
-          const nodeChroma = abSats[n] / 100 * 0.37;
-          const chromaDist = pxC - nodeChroma;
-          const absChromaDist = chromaDist < 0 ? -chromaDist : chromaDist;
+        // Row — saturation (non-wrapping, 2 cells)
+        const aRowF = (satC - abSatMin) / abSatStep;
+        const aRowI = aRowF < 0 ? 0 : aRowF > 1 ? 1 : Math.floor(aRowF);
+        const aV = aRowF - aRowI;
+        const aVc = aV < 0 ? 0 : aV > 1 ? 1 : aV;
 
-          // Combined distance
-          const distSq = hueDist * hueDist * 0.001 + absChromaDist * absChromaDist;
-          const weight = Math.exp(-distSq * AB_INV_2SIGMA2);
+        // Grid index helper
+        const gi = (row: number, col: number) => (row * abCols + col) * 2;
+        const aRowNext = aRowI < abRows - 1 ? aRowI + 1 : aRowI;
 
-          totalWeight += weight;
-          hueShift += abOffX[n] * weight;
-          chromaShift += abOffY[n] * weight;
-        }
+        // Bilinear interpolation of 4 corners
+        const w00 = (1 - aU) * (1 - aVc);
+        const w10 = aU * (1 - aVc);
+        const w01 = (1 - aU) * aVc;
+        const w11 = aU * aVc;
 
-        if (totalWeight > 0) {
-          hueShift /= totalWeight;
-          chromaShift /= totalWeight;
+        const abDx = w00 * abGrid![gi(aRowI, aColI)] + w10 * abGrid![gi(aRowI, aColNext)]
+                   + w01 * abGrid![gi(aRowNext, aColI)] + w11 * abGrid![gi(aRowNext, aColNext)];
+        const abDy = w00 * abGrid![gi(aRowI, aColI) + 1] + w10 * abGrid![gi(aRowI, aColNext) + 1]
+                   + w01 * abGrid![gi(aRowNext, aColI) + 1] + w11 * abGrid![gi(aRowNext, aColNext) + 1];
 
-          let newH = pxH + hueShift;
+        if (abDx !== 0 || abDy !== 0) {
+          let newH = pxH + abDx;
           newH = newH % 360;
           if (newH < 0) newH += 360;
 
-          let newC = pxC * (1 + chromaShift / 100);
+          let newSatP = satP + abDy;
+          let newC = (newSatP / 100) * 0.37;
           if (newC < 0) newC = 0;
-          else if (newC > 0.37) newC = 0.37;
+
+          // Gamut map (preserves hue and lightness, returns max safe chroma)
+          const gmC = gamutMapOkLChInline(oL, newC, newH);
 
           // Convert OKLCh back to sRGB 0-1 inline
-          const hRad = newH * (Math.PI / 180);
-          const nA = newC * Math.cos(hRad);
-          const nB = newC * Math.sin(hRad);
+          const nHr = newH * (Math.PI / 180);
+          const nA = gmC * Math.cos(nHr);
+          const nB = gmC * Math.sin(nHr);
 
-          // Inline oklabToLinearRgb + gamma encode
           const nl_ = oL + 0.3963377774 * nA + 0.2158037573 * nB;
           const nm_ = oL - 0.1055613458 * nA - 0.0638541728 * nB;
           const ns_ = oL - 0.0894841775 * nA - 1.2914855480 * nB;
@@ -1308,14 +1471,13 @@ export function processImagePixelsFast(
           let ng = -1.2684380046 * nll + 2.6097574011 * nlm - 0.3413193965 * nls;
           let nb = -0.0041960863 * nll - 0.7034186147 * nlm + 1.7076147010 * nls;
 
-          // Clamp and gamma encode
           rOut = linearToSrgbGamma(nr < 0 ? 0 : nr > 1 ? 1 : nr);
           gOut = linearToSrgbGamma(ng < 0 ? 0 : ng > 1 ? 1 : ng);
           bOut = linearToSrgbGamma(nb < 0 ? 0 : nb > 1 ? 1 : nb);
         }
       }
 
-      // CL grid (chroma/lum shifts) in OKLCh
+      // ── CL grid: bilinear mesh lookup ──
       if (hasCL) {
         // Re-derive OKLCh if AB grid modified values
         let curL: number;
@@ -1323,7 +1485,6 @@ export function processImagePixelsFast(
         let curH: number;
 
         if (hasAB) {
-          // Recalculate OKLCh from updated rOut, gOut, bOut
           const clr = srgbGammaToLinear(rOut);
           const clg = srgbGammaToLinear(gOut);
           const clb = srgbGammaToLinear(bOut);
@@ -1346,57 +1507,60 @@ export function processImagePixelsFast(
         }
 
         // Neutral protection
-        const skipCL = neutralProtection && curC < 0.003;
+        if (!(neutralProtection && curC < 0.005) && curC >= 0.005) {
+          // Convert to % and clamp
+          const chromaP = (curC / 0.37) * 100;
+          const lumP = curL * 100;
+          const chromaC = chromaP < clCMin ? clCMin : chromaP > (clCMin + (clCols - 1) * clCStep) ? (clCMin + (clCols - 1) * clCStep) : chromaP;
+          const lumC = lumP < clLMin ? clLMin : lumP > (clLMin + (clRows - 1) * clLStep) ? (clLMin + (clRows - 1) * clLStep) : lumP;
 
-        if (!skipCL && curC >= 0.003) {
-          let totalWeight = 0;
-          let chromaShift = 0;
-          let lumShiftVal = 0;
+          // Find cell
+          const cColF = (chromaC - clCMin) / clCStep;
+          const cColI = cColF < 0 ? 0 : cColF > clCols - 1 ? clCols - 1 : Math.floor(cColF);
+          const cU = cColF - cColI;
 
-          for (let n = 0; n < clCount; n++) {
-            let effectiveChroma = curC;
+          const cRowF = (lumC - clLMin) / clLStep;
+          const cRowI = cRowF < 0 ? 0 : cRowF > clRows - 1 ? clRows - 1 : Math.floor(cRowF);
+          const cV = cRowF - cRowI;
 
-            if (!clIsAllAxis) {
-              // Project chroma onto axis direction using hue alignment
-              const hRad = curH * Math.PI / 180;
-              const hueAlignment = Math.cos(hRad - clAxisHueRad);
-              effectiveChroma = curC * (hueAlignment > 0 ? hueAlignment : 0);
-            }
+          const cColNext = cColI < clCols - 1 ? cColI + 1 : cColI;
+          const cRowNext = cRowI < clRows - 1 ? cRowI + 1 : cRowI;
 
-            // Map node values to OKLCh ranges
-            const nodeChroma = clChromas[n] / 100 * 0.37;
-            const nodeLum = clLums[n] / 100;
+          // Grid index helper
+          const gi = (row: number, col: number) => (row * clCols + col) * 2;
 
-            const chromaDist = effectiveChroma - nodeChroma;
-            const absChromaDist = chromaDist < 0 ? -chromaDist : chromaDist;
+          // Bilinear interpolation
+          const w00 = (1 - cU) * (1 - cV);
+          const w10 = cU * (1 - cV);
+          const w01 = (1 - cU) * cV;
+          const w11 = cU * cV;
 
-            const lumDist = curL - nodeLum;
-            const absLumDist = lumDist < 0 ? -lumDist : lumDist;
+          let cDx = w00 * clGrid![gi(cRowI, cColI)] + w10 * clGrid![gi(cRowI, cColNext)]
+                  + w01 * clGrid![gi(cRowNext, cColI)] + w11 * clGrid![gi(cRowNext, cColNext)];
+          const cDy = w00 * clGrid![gi(cRowI, cColI) + 1] + w10 * clGrid![gi(cRowI, cColNext) + 1]
+                    + w01 * clGrid![gi(cRowNext, cColI) + 1] + w11 * clGrid![gi(cRowNext, cColNext) + 1];
 
-            const distSq = absChromaDist * absChromaDist + absLumDist * absLumDist;
-            const weight = Math.exp(-distSq * CL_INV_2SIGMA2);
-
-            totalWeight += weight;
-            chromaShift += clOffX[n] * weight;
-            lumShiftVal += clOffY[n] * weight;
+          // Axis rotation for hue alignment
+          if (!clIsAllAxis) {
+            const hRad = curH * Math.PI / 180;
+            const hueAlignment = Math.cos(hRad - clAxisHueRad);
+            cDx *= hueAlignment > 0 ? hueAlignment : 0;
           }
 
-          if (totalWeight > 0) {
-            chromaShift /= totalWeight;
-            lumShiftVal /= totalWeight;
-
-            let newC = curC * (1 + chromaShift / 100);
+          if (cDx !== 0 || cDy !== 0) {
+            let newC = curC * (1 + cDx / 100);
             if (newC < 0) newC = 0;
-            else if (newC > 0.37) newC = 0.37;
 
-            let newL = curL * (1 + lumShiftVal / 100);
+            let newL = curL * (1 + cDy / 100);
             if (newL < 0) newL = 0;
-            else if (newL > 1) newL = 1;
+
+            // Gamut map
+            const gmC = gamutMapOkLChInline(newL, newC, curH);
 
             // Convert OKLCh back to sRGB 0-1 inline
-            const hRad = curH * (Math.PI / 180);
-            const nA = newC * Math.cos(hRad);
-            const nB = newC * Math.sin(hRad);
+            const nHr = curH * (Math.PI / 180);
+            const nA = gmC * Math.cos(nHr);
+            const nB = gmC * Math.sin(nHr);
 
             const nl_ = newL + 0.3963377774 * nA + 0.2158037573 * nB;
             const nm_ = newL - 0.1055613458 * nA - 0.0638541728 * nB;
@@ -1423,9 +1587,55 @@ export function processImagePixelsFast(
     gOut = origG * inv255 * invIntensity + gOut * intensity;
     bOut = origB * inv255 * invIntensity + bOut * intensity;
 
-    // ── Step 6: Clamp and write back ──
-    pixels[i] = (rOut * 255 + 0.5) | 0;
-    pixels[i + 1] = (gOut * 255 + 0.5) | 0;
-    pixels[i + 2] = (bOut * 255 + 0.5) | 0;
+    // ── Step 6: Dither and write back ──
+    const px = (i / 4) % width;
+    const py = (i / 4) / width | 0;
+    const [dr, dg, db] = dither(rOut * 255, gOut * 255, bOut * 255, px, py);
+    pixels[i] = dr;
+    pixels[i + 1] = dg;
+    pixels[i + 2] = db;
   }
+}
+
+// ─── Inline gamut map for fast path (returns chroma only; L and h preserved) ───
+function gamutMapOkLChInline(L: number, C: number, h: number): number {
+  // Try original chroma first
+  const hRad = h * (Math.PI / 180);
+  const a = C * Math.cos(hRad);
+  const b = C * Math.sin(hRad);
+
+  const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+  const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+  const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+
+  const r = +4.0767416621 * l_ * l_ * l_ - 3.3077115913 * m_ * m_ * m_ + 0.2309699292 * s_ * s_ * s_;
+  const g = -1.2684380046 * l_ * l_ * l_ + 2.6097574011 * m_ * m_ * m_ - 0.3413193965 * s_ * s_ * s_;
+  const bv = -0.0041960863 * l_ * l_ * l_ - 0.7034186147 * m_ * m_ * m_ + 1.7076147010 * s_ * s_ * s_;
+
+  if (r >= -0.001 && r <= 1.001 && g >= -0.001 && g <= 1.001 && bv >= -0.001 && bv <= 1.001) {
+    return C;
+  }
+
+  // Binary search
+  let lo = 0, hi = C;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    const ma = mid * Math.cos(hRad);
+    const mb = mid * Math.sin(hRad);
+
+    const ml_ = L + 0.3963377774 * ma + 0.2158037573 * mb;
+    const mm_ = L - 0.1055613458 * ma - 0.0638541728 * mb;
+    const ms_ = L - 0.0894841775 * ma - 1.2914855480 * mb;
+
+    const mr = +4.0767416621 * ml_ * ml_ * ml_ - 3.3077115913 * mm_ * mm_ * mm_ + 0.2309699292 * ms_ * ms_ * ms_;
+    const mg = -1.2684380046 * ml_ * ml_ * ml_ + 2.6097574011 * mm_ * mm_ * mm_ - 0.3413193965 * ms_ * ms_ * ms_;
+    const mbv = -0.0041960863 * ml_ * ml_ * ml_ - 0.7034186147 * mm_ * mm_ * mm_ + 1.7076147010 * ms_ * ms_ * ms_;
+
+    if (mr >= -0.001 && mr <= 1.001 && mg >= -0.001 && mg <= 1.001 && mbv >= -0.001 && mbv <= 1.001) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
 }
