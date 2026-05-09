@@ -1,20 +1,16 @@
 #!/bin/bash
 cd /home/z/my-project
 
-# Install dependencies
-echo "[DEV] Installing dependencies..."
-bun install
+exec > /tmp/dev-bootstrap.log 2>&1
+
+echo "=== $(date) Starting custom dev script ==="
+
+# Install deps
+bun install 2>&1 || true
 
 # Setup database
-echo "[DEV] Setting up database..."
-bun run db:push 2>/dev/null || true
+bun run db:push 2>&1 || true
 
-# Build for production (faster startup, less memory)
-echo "[DEV] Building for production..."
-bun run build 2>/dev/null || true
-
-# Start the standalone server in the foreground
-# This keeps the subshell alive!
-echo "[DEV] Starting production server on port 3000..."
-cd /home/z/my-project/.next/standalone
-exec node server.js -p 3000
+# Start dev server in foreground (keeps init subshell alive)
+echo "Starting dev server on port 3000..."
+exec npx next dev -p 3000
