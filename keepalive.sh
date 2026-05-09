@@ -1,10 +1,7 @@
 #!/bin/bash
-cd /home/z/my-project
 while true; do
-  if ! ss -tlnp | grep -q ':3000'; then
-    echo "$(date): Port 3000 not listening, starting server..."
-    rm -rf .next/dev/lock
-    bun run dev &
-  fi
-  sleep 3
+  echo "Starting dev server at $(date)" >> /home/z/my-project/dev.log
+  bun run dev >> /home/z/my-project/dev.log 2>&1
+  echo "Dev server died at $(date), restarting in 2s..." >> /home/z/my-project/dev.log
+  sleep 2
 done
