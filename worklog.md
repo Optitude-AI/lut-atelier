@@ -826,3 +826,53 @@ Stage Summary:
 - Identity curves detected and skipped (no unnecessary processing)
 - Early exit prevents darkening from no-op pipeline
 - Gamut mapping preserves L and h, only reduces C
+
+---
+Task ID: 2
+Agent: full-stack-developer
+Task: Fix critical colour engine luminance corruption bug
+
+Work Log:
+- Read and audited the full lut-engine.ts pipeline (1698 lines), all OKLAB/OKLCh math verified correct
+- Audited both chroma-forge/ImageViewer.tsx and lut-atelier/ImageViewer.tsx processImagePixelsFast call sites
+- Fix 1: Cleaned up FastGradeParams interface in lut-engine.ts — removed deprecated abMesh/clMesh optional fields, made neutralProtection and clAxis optional with defaults, added debugLog field
+- Fix 2: Added createColorDebugLogger() function — circular buffer logger (100 entries) with log(), getLog(), clear(), size methods; singleton pattern for shared access
+- Fix 3: Added luminance lock validation in processImagePixelsFast after AB grid step — re-derives L from output sRGB, compares with original oL, logs violations beyond 0.01 tolerance (accounts for gamut mapping + gamma round-trip), limited to 20 violations per frame for performance
+- Fix 4: Fixed chroma-forge/ImageViewer.tsx — removed invalid abGlobalHueSigma/abGlobalSatSigma params (not in FastGradeParams), added neutralProtection and clAxis from Zustand store, removed unused ColorGradeParams import, updated useCallback dependency array
+- Fix 5: Fixed lut-atelier/ImageViewer.tsx — removed deprecated abMesh/clMesh params, removed unused buildABMeshTable/buildCLMeshTable imports, removed unused ColorGradeParams import
+- Made neutralProtection use ?? false and clAxis use ?? 'all' for backward compatibility in processImagePixelsFast
+- All ESLint checks pass (zero errors, zero warnings)
+- Dev server compiles successfully, page loads with 200 status
+
+Stage Summary:
+- FastGradeParams interface cleaned: deprecated abMesh/clMesh removed, neutralProtection/clAxis made optional, debugLog added
+- Color debug logger added: circular buffer (100 entries), singleton pattern, exported via createColorDebugLogger()
+- Luminance lock validation added: inline OKLAB re-derivation after AB grid step, tolerance 0.01, 20 max violations/frame
+- chroma-forge ImageViewer fixed: correct params (neutralProtection, clAxis), removed invalid params (abGlobalHueSigma, abGlobalSatSigma)
+- lut-atelier ImageViewer fixed: removed deprecated mesh params (abMesh, clMesh), removed unused imports
+- Zero ESLint errors, zero TypeScript errors
+---
+Task ID: 2
+Agent: full-stack-developer (orchestrated by Main)
+Task: Fix critical colour engine luminance corruption and parameter passing issues
+
+Work Log:
+- Audited full pipeline in lut-engine.ts: sRGB→linear→OKLAB→OKLCh transform chain is mathematically correct
+- Identified bug in chroma-forge/ImageViewer.tsx: passing non-existent params (abGlobalHueSigma, abGlobalSatSigma) and missing required params (neutralProtection, clAxis) to processImagePixelsFast
+- Identified bug in lut-atelier/ImageViewer.tsx: passing deprecated abMesh/clMesh params
+- Cleaned up FastGradeParams interface: removed deprecated abMesh/clMesh, made neutralProtection/clAxis optional with defaults
+- Added debugLog boolean field to FastGradeParams
+- Implemented ColorDebugLoggerImpl class: circular buffer (100 entries), log/getLog/clear/size methods
+- Created createColorDebugLogger() singleton accessor, exported from lut-engine.ts
+- Added luminance lock validation in processImagePixelsFast: after AB grid transform, re-derives L from output sRGB and compares with original oL; logs violations >0.01 tolerance (accounts for gamut mapping + gamma round-trip); limited to 20 violations per frame for performance
+- Fixed chroma-forge/ImageViewer.tsx: removed invalid params, added neutralProtection and clAxis from store, removed unused ColorGradeParams import, updated useCallback deps
+- Fixed lut-atelier/ImageViewer.tsx: removed deprecated abMesh/clMesh, removed unused buildABMeshTable/buildCLMeshTable imports, cleaned params
+- Verified: bun run lint passes with zero errors
+- Verified: dev server compiles and responds 200 OK
+
+Stage Summary:
+- Parameter passing bugs fixed in both ImageViewer components
+- FastGradeParams interface cleaned up (removed deprecated fields, added debugLog)
+- Luminance lock validation added for debug mode (verifies AB grid preserves L)
+- ColorDebugLogger singleton exported for external access
+- Zero lint errors

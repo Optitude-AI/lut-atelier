@@ -23,9 +23,6 @@ import {
   buildCurveLUT,
   buildABNodeArrays,
   buildCLNodeArrays,
-  buildABMeshTable,
-  buildCLMeshTable,
-  type ColorGradeParams,
 } from '@/lib/lut-engine';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
@@ -352,10 +349,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
     const abArrays = buildABNodeArrays(abNodes);
     const clArrays = buildCLNodeArrays(clNodes);
 
-    // Build bilinear mesh tables for grid deformation
-    const abMesh = buildABMeshTable(abNodes);
-    const clMesh = buildCLMeshTable(clNodes);
-
     // Process pixels using the fast path
     processImagePixelsFast(imageData.data, src.width, src.height, {
       masterLUT,
@@ -366,8 +359,6 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       channelData,
       abNodes: abArrays,
       clNodes: clArrays,
-      abMesh,
-      clMesh,
       globalIntensity,
       neutralProtection,
       clAxis,

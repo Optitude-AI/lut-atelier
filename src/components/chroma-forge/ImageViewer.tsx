@@ -22,8 +22,7 @@ import {
   processImagePixelsFast,
   buildCurveLUT,
   buildABNodeArrays,
-  buildCLNodeArrays,
-  type ColorGradeParams,
+ buildCLNodeArrays,
 } from '@/lib/lut-engine';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Badge } from '@/components/ui/badge';
@@ -276,6 +275,8 @@ export default function ImageViewer({ className }: ImageViewerProps) {
   const clNodes = useAppStore((s) => s.clNodes);
   const gradedUrl = useAppStore((s) => s.gradedUrl);
   const setGradedUrl = useAppStore((s) => s.setGradedUrl);
+  const neutralProtection = useAppStore((s) => s.settings.neutralProtection);
+  const clAxis = useAppStore((s) => s.clAxis);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -362,8 +363,8 @@ export default function ImageViewer({ className }: ImageViewerProps) {
       abNodes: abArrays,
       clNodes: clArrays,
       globalIntensity,
-      abGlobalHueSigma: settings.abHueSigma,
-      abGlobalSatSigma: settings.abSatSigma,
+      neutralProtection,
+      clAxis,
     });
 
     ctx.putImageData(imageData, 0, 0);
@@ -380,7 +381,7 @@ export default function ImageViewer({ className }: ImageViewerProps) {
         setGradedUrl(url);
       }
     }, 'image/png');
-  }, [curveData, channelData, abNodes, clNodes, globalIntensity, settings, setGradedUrl]);
+  }, [curveData, channelData, abNodes, clNodes, globalIntensity, neutralProtection, clAxis, setGradedUrl]);
 
   // Keep ref in sync so image-load effect can call latest version
   useEffect(() => {

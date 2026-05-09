@@ -114,12 +114,10 @@ export interface FastGradeParams {
   abNodes: ABNodeArrays;
   clNodes: CLNodeArrays;
   globalIntensity: number;
-  neutralProtection: boolean;
-  clAxis: string;
-  /** @deprecated No longer used — kept for backward compatibility with callers */
-  abMesh?: ABMeshTable | null;
-  /** @deprecated No longer used — kept for backward compatibility with callers */
-  clMesh?: CLMeshTable | null;
+  neutralProtection?: boolean;
+  clAxis?: string;
+  /** When true, validates that AB grid preserves L and logs violations */
+ debugLog?: boolean;
 }
 
 // ─── OKLAB Color Space Conversions ───
@@ -1206,6 +1204,66 @@ export function processImagePixels(
   }
 }
 
+// ─── Color Debug Logger ───
+
+/** Single log entry for the color debug logger */
+interface ColorDebugEntry {
+  timestamp: number;
+  message: string;
+  data?: Record<string, number | string>;
+}
+
+/** Circular buffer logger for color pipeline debug output (max 100 entries) */
+class ColorDebugLoggerImpl {
+  private buffer: ColorDebugEntry[] = [];
+  private maxSize: number;
+
+  constructor(maxSize = 100) {
+    this.maxSize = maxSize;
+  }
+
+  log(message: string, data?: Record<string, number | string>): void {
+    this.buffer.push({
+      timestamp: performance.now(),
+      message,
+      data,
+    });
+    // Keep only last maxSize entries
+    if (this.buffer.length > this.maxSize) {
+      this.buffer.shift();
+    }
+  }
+
+  getLog(): ColorDebugEntry[] {
+    return this.buffer.slice();
+  }
+
+  clear(): void {
+    this.buffer.length = 0;
+  }
+
+  get size(): number {
+    return this.buffer.length;
+  }
+}
+
+/** Singleton debug logger instance shared across the pipeline */
+const colorDebugLogger = new ColorDebugLoggerImpl(100);
+
+/**
+ * Create (or access) the shared color debug logger.
+ * Returns a logger with `log(message, data)` and `getLog()` methods.
+ * Keeps only the last 100 entries in a circular buffer.
+ *
+ * Usage:
+ *   const logger = createColorDebugLogger();
+ *   logger.log('AB grid applied', { originalL: 0.5, newL: 0.5001, delta: 0.0001 });
+ *   const entries = logger.getLog();
+ */
+export function createColorDebugLogger(): typeof colorDebugLogger {
+  return colorDebugLogger;
+}
+
 // ─── Inline gamut map for fast path (returns chroma only; L and h preserved) ───
 
 /**
@@ -1299,8 +1357,9 @@ export function processImagePixelsFast(
   const bLUT = params.bLUT;
   const lumLUT = params.lumLUT;
   const channelData = params.channelData;
-  const neutralProtection = params.neutralProtection;
-  const clAxis = params.clAxis as CLAxisType;
+  const neutralProtection = params.neutralProtection ?? false;
+  const clAxis = (params.clAxis ?? 'all') as CLAxisType;
+  const doDebugLog = params.debugLog ?? false;
 
   const intensity = Math.max(0, Math.min(1, params.globalIntensity / 100));
   const invIntensity = 1 - intensity;
@@ -1383,6 +1442,9 @@ export function processImagePixelsFast(
 
   const totalPixels = pixels.length;
   const inv255 = 1 / 255;
+
+  // Debug counter for luminance lock violations (logged, not thrown)
+  let debugViolationCount = 0;
 
   for (let i = 0; i < totalPixels; i += 4) {
     const origR = pixels[i];
@@ -1578,6 +1640,31 @@ export function processImagePixelsFast(
             gOut = linearToSrgbGamma(ng < 0 ? 0 : ng > 1 ? 1 : ng);
             bOut = linearToSrgbGamma(nb < 0 ? 0 : nb > 1 ? 1 : nb);
             abModified = true;
+
+            // ── Luminance lock validation (debug mode only) ──
+            // Verify that AB grid preserved L as required by design.
+            // If debugLog is enabled, log violations where L drifted beyond tolerance.
+            // NOTE: This re-derives L from the output sRGB, which incurs gamma round-trip,
+            // so a tolerance of 0.01 is used (gamut mapping + gamma quantization can shift L slightly).
+            if (doDebugLog && debugViolationCount < 20) {
+              const dbgLR = srgbGammaToLinear(rOut);
+              const dbgLG = srgbGammaToLinear(gOut);
+              const dbgLB = srgbGammaToLinear(bOut);
+              const dbgL_ = 0.4122214708 * dbgLR + 0.5363325363 * dbgLG + 0.0514459929 * dbgLB;
+              const dbgm_ = 0.2119034982 * dbgLR + 0.6806995451 * dbgLG + 0.1073969566 * dbgLB;
+              const dbs_ = 0.0883024619 * dbgLR + 0.2817188376 * dbgLG + 0.6299787005 * dbgLB;
+              const dbgNewL = 0.2104542553 * Math.cbrt(dbgL_) + 0.7936177850 * Math.cbrt(dbgm_) - 0.0040720468 * Math.cbrt(dbs_);
+              const lDelta = Math.abs(dbgNewL - oL);
+              if (lDelta > 0.01) {
+                colorDebugLogger.log('AB grid L drift detected', {
+                  originalL: +oL.toFixed(6),
+                  afterRoundTripL: +dbgNewL.toFixed(6),
+                  delta: +lDelta.toFixed(6),
+                  pixel: `${origR},${origG},${origB}`,
+                });
+                debugViolationCount++;
+              }
+            }
           }
         }
       }
