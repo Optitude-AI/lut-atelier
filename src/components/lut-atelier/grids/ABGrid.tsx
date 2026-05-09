@@ -124,16 +124,16 @@ const CONNS: [number, number][] = [
 
 const TRIS: [number, number, number][] = [
   // center → ring-1  (8 sectors)
-  ...Array.from({ length: 8 }, (_, i) => [C, R1 + i, R1 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [C, R1 + i, R1 + (i + 1) % 8] as [number, number, number]),
   // ring-1 → ring-2  (16 triangles)
-  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + (i + 7) % 8, R2 + i] as [number, number]),
-  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + i, R1 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + (i + 7) % 8, R2 + i] as [number, number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R1 + i, R2 + i, R1 + (i + 1) % 8] as [number, number, number]),
   // ring-2 → ring-3  (16 triangles)
-  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i, R3 + (i + 1) % 8] as [number, number]),
-  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8, R2 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + i, R3 + (i + 1) % 8] as [number, number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R2 + i, R3 + (i + 1) % 8, R2 + (i + 1) % 8] as [number, number, number]),
   // ring-3 → ring-4  (16 triangles)
-  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + i, R4 + (i + 1) % 8] as [number, number]),
-  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + (i + 1) % 8, R3 + (i + 1) % 8] as [number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + i, R4 + (i + 1) % 8] as [number, number, number]),
+  ...Array.from({ length: 8 }, (_, i) => [R3 + i, R4 + (i + 1) % 8, R3 + (i + 1) % 8] as [number, number, number]),
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════════
