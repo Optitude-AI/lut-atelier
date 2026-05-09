@@ -702,3 +702,29 @@ Stage Summary:
 - Neutral protection prevents grey/neutral tones from being affected by grid operations
 - Undo/redo system added to store
 - Dev server compiling successfully, zero new lint errors in source files
+---
+Task ID: 1-2-4-5
+Agent: Main Agent + Full-Stack Subagent
+Task: Fix lint errors, rebuild grid deformation, add gamut mapping, add dithering
+
+Work Log:
+- Added `.netlify/**` to ESLint ignore list — all 299 errors were in build artifacts
+- Rewrote `interpolateABGrid()` from Gaussian to bilinear control mesh (12×3 hue×saturation)
+- Rewrote `interpolateCLGrid()` from Gaussian to bilinear control mesh (6×6 chroma×luminance)
+- Added `gamutMapOkLCh()` — binary search chroma reduction (12 iterations, preserves hue/lightness)
+- Added `gamutMapOkLChInline()` — inlined version for fast path
+- Added 4×4 Bayer ordered dithering via `BAYER_4X4` matrix and `dither()` function
+- Created `ABMeshTable`/`CLMeshTable` types and `buildABMeshTable()`/`buildCLMeshTable()` builders
+- Updated `FastGradeParams` with `abMesh` and `clMesh` fields
+- Updated `applyColorGradePixel()`, `processImagePixels()`, `processImagePixelsFast()` pipelines
+- Updated `ImageViewer.tsx` to import and pass mesh tables
+- TypeScript compilation passes with zero errors
+- Dev server runs clean (GET / 200 in ~2s)
+- Pushed to GitHub: commit b0a2616
+
+Stage Summary:
+- Engine v2 complete: bilinear mesh replaces Gaussian weighting
+- Gamut mapping prevents colour clipping
+- Ordered dithering prevents colour banding
+- All existing exports and API signatures preserved
+- Remaining: OKLAB L/a/b curves, presets, keyboard shortcuts, polish
