@@ -1,8 +1,8 @@
 'use client';
 
 import { ThemeProvider } from 'next-themes';
-import HomeScreen from '@/components/chroma-forge/home/HomeScreen';
-import Workspace from '@/components/chroma-forge/Workspace';
+import HomeScreen from '@/components/lut-atelier/home/HomeScreen';
+import Workspace from '@/components/lut-atelier/Workspace';
 import { useAppStore } from '@/store/useAppStore';
 import { AnimatePresence, motion } from 'framer-motion';
 

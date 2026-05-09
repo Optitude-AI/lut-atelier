@@ -9,6 +9,7 @@ export type CurveChannel = 'master' | 'r' | 'g' | 'b' | 'luminance';
 export type CurveType = 'custom' | 's-curve' | 'contrast' | 'fade' | 'linear-contrast' | 'negative' | 'cross-process' | 'bleach-bypass';
 export type ColorSpace = 'srgb' | 'adobe-rgb' | 'prophoto-rgb' | 'rec709' | 'rec2020' | 'log-c' | 's-log3' | 'alog';
 export type InputColorSpace = 'linear' | 'log-c' | 's-log3' | 'alog' | 'red-log' | 'v-log';
+export type CLAxisType = 'red-cyan' | 'green-magenta' | 'blue-yellow' | 'all';
 export type MaskType = 'luminance' | 'color-range' | 'hue-range' | 'saturation-range';
 export type BatchStatus = 'idle' | 'processing' | 'completed' | 'error';
 
@@ -21,10 +22,6 @@ export interface GridNode {
   offsetY: number;
   originalOffsetX?: number;
   originalOffsetY?: number;
-  sigmaMult: number;
-  pinned: boolean;
-  abHueSigma: number;
-  abSatSigma: number;
 }
 
 export interface CLGridNode {
@@ -143,6 +140,14 @@ export interface LookData {
   inputColorSpace: InputColorSpace;
 }
 
+export interface GradingSnapshot {
+  abNodes: GridNode[];
+  clNodes: CLGridNode[];
+  curveData: CurveData[];
+  channelData: Record<string, ChannelData>;
+  globalIntensity: number;
+}
+
 export interface ImageInfo {
   dataUrl: string;
   name: string;
@@ -160,8 +165,8 @@ export interface AppSettings {
   showGamutWarnings: boolean;
   curveResolution: number;
   interpolationMode: 'linear' | 'cubic' | 'smoothstep';
-  abHueSigma: number;
-  abSatSigma: number;
+  neutralProtection: boolean;
+  deformationSmoothness: number;
 }
 
 export interface AppStore {
@@ -309,13 +314,23 @@ export interface AppStore {
   // Volume
   volume: number;
   setVolume: (vol: number) => void;
+
+  // CL axis
+  clAxis: CLAxisType;
+  setCLAxis: (axis: CLAxisType) => void;
+
+  // Undo/Redo
+  undoStack: GradingSnapshot[];
+  undo: () => void;
+  redoStack: GradingSnapshot[];
+  redo: () => void;
 }
 
 // ─── Helper Functions ───
 
 function generateDefaultABNodes(): GridNode[] {
   const nodes: GridNode[] = [];
-  const keyHues = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
+  const keyHues = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
   const keySats = [25, 50, 75];
 
   for (const hue of keyHues) {
@@ -329,10 +344,6 @@ function generateDefaultABNodes(): GridNode[] {
         offsetY: 0,
         originalOffsetX: 0,
         originalOffsetY: 0,
-        sigmaMult: 1.0,
-        pinned: false,
-        abHueSigma: 0,
-        abSatSigma: 0,
       });
     }
   }
@@ -399,7 +410,25 @@ const sampleLUTs: LUTItem[] = [
 
 // ─── Store ───
 
-export const useAppStore = create<AppStore>((set, get) => ({
+export const useAppStore = create<AppStore>((set, get) => {
+  // ─── Undo helpers ───
+  const MAX_UNDO = 50;
+
+  function pushUndoSnapshot() {
+    const state = get();
+    const snapshot: GradingSnapshot = {
+      abNodes: structuredClone(state.abNodes),
+      clNodes: structuredClone(state.clNodes),
+      curveData: structuredClone(state.curveData),
+      channelData: structuredClone(state.channelData),
+      globalIntensity: state.globalIntensity,
+    };
+    const stack = [...state.undoStack, snapshot];
+    if (stack.length > MAX_UNDO) stack.shift();
+    set({ undoStack: stack, redoStack: [] });
+  }
+
+  return {
   // Navigation
   viewMode: 'home',
   setViewMode: (mode) => set({ viewMode: mode }),
@@ -422,15 +451,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
   activeGridType: 'ab',
   setActiveGridType: (type) => set({ activeGridType: type }),
   abNodes: generateDefaultABNodes(),
-  setABNodes: (nodes) => set({ abNodes: nodes }),
-  updateABNode: (id, offsetX, offsetY) => set((state) => ({
+  setABNodes: (nodes) => { pushUndoSnapshot(); set({ abNodes: nodes }); },
+  updateABNode: (id, offsetX, offsetY) => { pushUndoSnapshot(); set((state) => ({
     abNodes: state.abNodes.map(n => n.id === id ? { ...n, offsetX, offsetY } : n),
-  })),
+  })); },
   clNodes: generateDefaultCLNodes(),
-  setCLNodes: (nodes) => set({ clNodes: nodes }),
-  updateCLNode: (id, offsetX, offsetY) => set((state) => ({
+  setCLNodes: (nodes) => { pushUndoSnapshot(); set({ clNodes: nodes }); },
+  updateCLNode: (id, offsetX, offsetY) => { pushUndoSnapshot(); set((state) => ({
     clNodes: state.clNodes.map(n => n.id === id ? { ...n, offsetX, offsetY } : n),
-  })),
+  })); },
   selectedNodeId: null,
   setSelectedNodeId: (id) => set({ selectedNodeId: id }),
   showNodeHelpers: true,
@@ -438,35 +467,35 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   // Curves
   curveData: generateDefaultCurves(),
-  setCurveData: (data) => set({ curveData: data }),
-  updateCurvePoints: (channel, points) => set((state) => ({
+  setCurveData: (data) => { pushUndoSnapshot(); set({ curveData: data }); },
+  updateCurvePoints: (channel, points) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? { ...c, points, type: 'custom' } : c),
-  })),
-  updateCurveType: (channel, type) => set((state) => ({
+  })); },
+  updateCurveType: (channel, type) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? { ...c, type } : c),
-  })),
-  updateCurvePoint: (channel, pointId, x, y) => set((state) => ({
+  })); },
+  updateCurvePoint: (channel, pointId, x, y) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? {
       ...c,
       type: 'custom',
       points: c.points.map(p => p.id === pointId ? { ...p, x, y } : p),
     } : c),
-  })),
-  addCurvePoint: (channel, x, y) => set((state) => ({
+  })); },
+  addCurvePoint: (channel, x, y) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? {
       ...c,
       type: 'custom',
       points: [...c.points, { id: `${channel}-${x}`, x, y }].sort((a, b) => a.x - b.x),
     } : c),
-  })),
-  removeCurvePoint: (channel, pointId) => set((state) => ({
+  })); },
+  removeCurvePoint: (channel, pointId) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? {
       ...c,
       type: 'custom',
       points: c.points.filter(p => p.id !== pointId),
     } : c),
-  })),
-  resetCurve: (channel) => set((state) => ({
+  })); },
+  resetCurve: (channel) => { pushUndoSnapshot(); set((state) => ({
     curveData: state.curveData.map(c => c.channel === channel ? {
       ...c,
       type: 'custom',
@@ -475,17 +504,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
         { id: `${channel}-255`, x: 255, y: 255 },
       ],
     } : c),
-  })),
+  })); },
 
   // Channels
   channelData: generateDefaultChannels(),
-  updateChannel: (channel, data) => set((state) => ({
+  updateChannel: (channel, data) => { pushUndoSnapshot(); set((state) => ({
     channelData: {
       ...state.channelData,
       [channel]: { ...state.channelData[channel], ...data },
     },
-  })),
-  resetChannels: () => set({ channelData: generateDefaultChannels() }),
+  })); },
+  resetChannels: () => { pushUndoSnapshot(); set({ channelData: generateDefaultChannels() }); },
 
   // Masks
   masks: [],
@@ -603,8 +632,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     showGamutWarnings: true,
     curveResolution: 256,
     interpolationMode: 'cubic',
-    abHueSigma: 40,
-    abSatSigma: 30,
+    neutralProtection: true,
+    deformationSmoothness: 50,
   },
   updateSettings: (settings) => set((state) => ({
     settings: { ...state.settings, ...settings },
@@ -624,9 +653,62 @@ export const useAppStore = create<AppStore>((set, get) => ({
 
   // Global intensity
   globalIntensity: 100,
-  setGlobalIntensity: (intensity) => set({ globalIntensity: intensity }),
+  setGlobalIntensity: (intensity) => { pushUndoSnapshot(); set({ globalIntensity: intensity }); },
 
   // Volume
   volume: 0,
   setVolume: (vol) => set({ volume: vol }),
-}));
+
+  // CL axis
+  clAxis: 'all' as CLAxisType,
+  setCLAxis: (axis) => set({ clAxis: axis }),
+
+  // Undo/Redo
+  undoStack: [] as GradingSnapshot[],
+  undo: () => {
+    const state = get();
+    if (state.undoStack.length === 0) return;
+    const stack = [...state.undoStack];
+    const snapshot = stack.pop()!;
+    const currentSnapshot: GradingSnapshot = {
+      abNodes: structuredClone(state.abNodes),
+      clNodes: structuredClone(state.clNodes),
+      curveData: structuredClone(state.curveData),
+      channelData: structuredClone(state.channelData),
+      globalIntensity: state.globalIntensity,
+    };
+    set({
+      abNodes: snapshot.abNodes,
+      clNodes: snapshot.clNodes,
+      curveData: snapshot.curveData,
+      channelData: snapshot.channelData,
+      globalIntensity: snapshot.globalIntensity,
+      undoStack: stack,
+      redoStack: [...state.redoStack, currentSnapshot],
+    });
+  },
+  redoStack: [] as GradingSnapshot[],
+  redo: () => {
+    const state = get();
+    if (state.redoStack.length === 0) return;
+    const stack = [...state.redoStack];
+    const snapshot = stack.pop()!;
+    const currentSnapshot: GradingSnapshot = {
+      abNodes: structuredClone(state.abNodes),
+      clNodes: structuredClone(state.clNodes),
+      curveData: structuredClone(state.curveData),
+      channelData: structuredClone(state.channelData),
+      globalIntensity: state.globalIntensity,
+    };
+    set({
+      abNodes: snapshot.abNodes,
+      clNodes: snapshot.clNodes,
+      curveData: snapshot.curveData,
+      channelData: snapshot.channelData,
+      globalIntensity: snapshot.globalIntensity,
+      undoStack: [...state.undoStack, currentSnapshot],
+      redoStack: stack,
+    });
+  },
+  };
+});

@@ -16,7 +16,7 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Chroma Forge — Next-Gen Color Grading for Photographers",
   description: "Professional LUT creator with AI-powered reference matching, interactive color grids, and seamless Photoshop/Lightroom/Capture One integration. Built for still photographers.",
-  keywords: ["Chroma Forge", "LUT", "color grading", "photography", "Photoshop", "Lightroom", "Capture One", "color science", "3D LUT"],
+  keywords: ["LUT", "color grading", "photography", "Photoshop", "Lightroom", "Capture One", "color science", "3D LUT"],
   icons: {
     icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>",
   },
